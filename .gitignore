@@ -1,0 +1,9 @@
+# Holds the R2 keys and the GitHub read token. Never commit it.
+sm-sync.config.json
+.env
+
+# Save files and transfer leftovers
+*.db
+*.db-journal
+*.db-wal
+*.download

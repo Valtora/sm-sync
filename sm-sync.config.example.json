@@ -1,0 +1,9 @@
+{
+  "Endpoint": "https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com",
+  "Bucket": "scrap-mechanic",
+  "AccessKeyId": "PASTE_ACCESS_KEY_ID",
+  "SecretAccessKey": "PASTE_SECRET_ACCESS_KEY",
+  "SaveName": "Business",
+  "GitHubRepo": "Valtora/sm-sync",
+  "GitHubToken": "PASTE_READ_ONLY_GITHUB_TOKEN"
+}

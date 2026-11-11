@@ -1,0 +1,46 @@
+SCRAP MECHANIC SYNC - HOW TO USE
+
+SETUP (once)
+
+1. Right-click the zip file, choose "Extract All", and extract it somewhere you will
+   find it again, for example your Documents folder. Keep all the files together.
+2. Open the extracted folder and double-click "Scrap Mechanic Sync".
+   If Windows shows a blue "Windows protected your PC" box, click "More info" and then
+   "Run anyway". If it shows "Open File - Security Warning", click "Run".
+3. A black and orange window opens and asks for your name. Type it and press Enter.
+   Use a different name from your friend.
+
+
+EVERY TIME YOU WANT TO PLAY
+
+1. Make sure Scrap Mechanic is closed.
+2. Double-click "Scrap Mechanic Sync".
+3. Look at the box at the top. It says who has the world.
+4. If it says the turn is FREE (or that YOU have it), press 1.
+5. The game starts by itself. LEAVE THE WINDOW OPEN while you play.
+6. Load the world as normal and play.
+7. When you are done, quit the game completely (back to the desktop).
+8. Wait for the green line that says:
+       "The world is uploaded and the turn is free."
+   Now you can close the window or turn the PC off.
+
+
+IF SOMETHING LOOKS WRONG
+
+"<name> has the world"
+   Your friend is playing, or forgot to finish. Message them. Do not play until it
+   says the turn is free, or your progress will be lost.
+
+Steam asks about a "Cloud conflict"
+   Choose the LOCAL files.
+
+You closed the window by accident, or the upload failed
+   Quit the game, open "Scrap Mechanic Sync" again and press 2.
+
+Red text
+   It always says what happened and what to do. If you are not sure, take a photo of
+   the window, send it to your friend, and do not play until it is sorted.
+
+Press H in the menu for a longer explanation of how it all works.
+
+The tool updates itself. If it says it has updated, that is normal.
