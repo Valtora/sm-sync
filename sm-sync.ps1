@@ -29,7 +29,7 @@ $ErrorActionPreference = 'Stop'
 
 # Bump Version for every release and tag the commit v<Version>.
 # Bump MinPeerVersion only when older copies must not touch the shared state any more.
-$script:Version        = '0.2.1'
+$script:Version        = '0.2.2'
 $script:MinPeerVersion = '0.2.0'
 
 $script:SteamAppId   = '387990'
@@ -138,6 +138,27 @@ function Reset-Console {
 }
 
 function Get-ConsoleWidth { try { return [Console]::WindowWidth } catch { return 100 } }
+function Get-ConsoleHeight { if ($env:SMSYNC_HEIGHT) { return [int]$env:SMSYNC_HEIGHT }; if ([Console]::IsOutputRedirected) { return 60 }; try { return [Console]::WindowHeight } catch { return 60 } }
+
+function Request-ConsoleSize([int]$Columns, [int]$Rows) {
+    # Grows a classic console window so the whole menu fits. Windows Terminal ignores this;
+    # there the launcher asks for the size when it opens the window.
+    if ($env:WT_SESSION -or -not $script:Interactive -or -not $script:Fancy) { return }
+    try {
+        $raw = $Host.UI.RawUI
+        $max = $raw.MaxPhysicalWindowSize
+        $c = [Math]::Min($Columns, $max.Width); $r = [Math]::Min($Rows, $max.Height)
+        $buffer = $raw.BufferSize
+        if ($buffer.Width -lt $c) { $buffer.Width = $c }
+        if ($buffer.Height -lt $r) { $buffer.Height = $r }
+        $raw.BufferSize = $buffer
+        $window = $raw.WindowSize
+        if ($window.Width -lt $c) { $window.Width = $c }
+        if ($window.Height -lt $r) { $window.Height = $r }
+        $raw.WindowSize = $window
+    }
+    catch { }
+}
 
 function Write-BoxTop([string]$Title) {
     $t = " $Title "
@@ -165,9 +186,9 @@ $script:Font = @{
     ' ' = @('  ', '  ', '  ', '  ', '  ')
 }
 
-function Show-Banner {
+function Show-Banner([switch]$Small) {
     Say ''
-    if ($script:Fancy -and (Get-ConsoleWidth) -ge 76) {
+    if ($script:Fancy -and -not $Small -and (Get-ConsoleWidth) -ge 76) {
         for ($row = 0; $row -lt 5; $row++) {
             $line = '  '
             foreach ($letter in 'SCRAP MECHANIC'.ToCharArray()) { $line += $script:Font[[string]$letter][$row] + ' ' }
@@ -1049,52 +1070,62 @@ function Get-StatusModel {
     return $m
 }
 
-function Show-StatusBox($Model) {
-    Write-BoxTop 'WORLD STATUS'
-    Write-BoxRow @('', 'Text')
-    Write-BoxRow @('You       ', 'Dim', $script:Player, 'Text')
-    Write-BoxRow @('', 'Text')
+function Get-StatusRows($Model) {
+    # The rows of the status box. A $null row is a spacer that a short window may drop.
+    $rows = @()
+    $rows += , $null
+    $rows += , @('You       ', 'Dim', $script:Player, 'Text')
+    $rows += , $null
     $hint = ''; $hintColor = 'Text'
     if (-not $Model.Online) {
         $sync = Get-SyncException $Model.Problem
         $what = 'Could not reach the online storage.'; if ($sync) { $what = $sync.Message }
-        Write-BoxRow @('World     ', 'Dim', 'UNKNOWN', 'Bad')
+        $rows += , @('World     ', 'Dim', 'UNKNOWN', 'Bad')
         $hint = "$what Press R to try again."; $hintColor = 'Bad'
     }
     elseif (-not $Model.State) {
-        Write-BoxRow @('World     ', 'Dim', 'nothing shared yet', 'Amber')
+        $rows += , @('World     ', 'Dim', 'nothing shared yet', 'Amber')
         $hint = 'Press 2 to upload the world from this PC as the starting point.'
     }
     else {
         $s = $Model.State; $c = Get-Current $s
         if ($s.holder -eq $script:Player) {
-            Write-BoxRow @('World     ', 'Dim', 'CHECKED OUT BY YOU', 'Amber', ("   since {0} ({1})" -f (Format-When $s.heldSince), (Format-Ago $s.heldSince)), 'Dim')
+            $rows += , @('World     ', 'Dim', 'CHECKED OUT BY YOU', 'Amber', ("   since {0} ({1})" -f (Format-When $s.heldSince), (Format-Ago $s.heldSince)), 'Dim')
             $hint = 'You have the newest copy. Press 1 to keep playing, or 2 to upload it and make it available.'
         }
         elseif ($s.holder) {
-            Write-BoxRow @('World     ', 'Dim', ("CHECKED OUT BY {0}" -f $s.holder.ToUpperInvariant()), 'Bad', ("   since {0} ({1})" -f (Format-When $s.heldSince), (Format-Ago $s.heldSince)), 'Dim')
+            $rows += , @('World     ', 'Dim', ("CHECKED OUT BY {0}" -f $s.holder.ToUpperInvariant()), 'Bad', ("   since {0} ({1})" -f (Format-When $s.heldSince), (Format-Ago $s.heldSince)), 'Dim')
             $hint = "$($s.holder) has the newest copy and has not uploaded it yet. Wait for them to finish. Do not play until this says AVAILABLE."; $hintColor = 'Bad'
         }
         else {
-            Write-BoxRow @('World     ', 'Dim', 'AVAILABLE', 'Good', '   nobody has it checked out', 'Dim')
+            $rows += , @('World     ', 'Dim', 'AVAILABLE', 'Good', '   nobody has it checked out', 'Dim')
             $hint = 'Ready. Press 1 to play.'; $hintColor = 'Good'
         }
-        Write-BoxRow @('', 'Text')
-        Write-BoxRow @('Last save ', 'Dim', ("version {0}" -f $c.version), 'Text', ("   {0} ({1}) by {2}   {3}" -f (Format-When $c.at), (Format-Ago $c.at), $c.by, (Format-Size $c.size)), 'Dim')
+        $rows += , $null
+        $rows += , @('Last save ', 'Dim', ("version {0}" -f $c.version), 'Text', ("   {0} ({1}) by {2}   {3}" -f (Format-When $c.at), (Format-Ago $c.at), $c.by, (Format-Size $c.size)), 'Dim')
         if ($c.note) {
-            Write-BoxRow @('', 'Text')
-            Write-BoxRow @('Message about last save', 'Dim')
-            foreach ($line in (Split-Wrap ('"' + $c.note + '"') ($script:W - 4))) { Write-BoxRow @($line, 'Amber') }
+            $rows += , $null
+            $rows += , @('Message about last save', 'Dim')
+            foreach ($line in (Split-Wrap ('"' + $c.note + '"') ($script:W - 4))) { $rows += , @($line, 'Amber') }
         }
-        Write-BoxRow @('', 'Text')
+        $rows += , $null
         switch ($Model.Local) {
-            'same'      { Write-BoxRow @('This PC   ', 'Dim', 'up to date', 'Good') }
-            'different' { Write-BoxRow @('This PC   ', 'Dim', 'different from the shared world', 'Amber') }
-            default     { Write-BoxRow @('This PC   ', 'Dim', 'no copy yet', 'Dim') }
+            'same'      { $rows += , @('This PC   ', 'Dim', 'up to date', 'Good') }
+            'different' { $rows += , @('This PC   ', 'Dim', 'different from the shared world', 'Amber') }
+            default     { $rows += , @('This PC   ', 'Dim', 'no copy yet', 'Dim') }
         }
     }
-    Write-BoxRow @('', 'Text')
-    foreach ($line in (Split-Wrap $hint ($script:W - 4))) { Write-BoxRow @($line, $hintColor) }
+    $rows += , @('', 'Text')
+    foreach ($line in (Split-Wrap $hint ($script:W - 4))) { $rows += , @($line, $hintColor) }
+    return , $rows
+}
+
+function Show-StatusBox($Model, [switch]$Compact) {
+    Write-BoxTop 'WORLD STATUS'
+    foreach ($row in (Get-StatusRows $Model)) {
+        if ($null -eq $row) { if (-not $Compact) { Write-BoxRow @('', 'Text') } }
+        else { Write-BoxRow $row }
+    }
     Write-BoxBottom
 }
 
@@ -1521,15 +1552,24 @@ function Read-MenuChoice($Items, [int]$Selected, [string]$Signature) {
 }
 
 function Show-Menu {
+    Request-ConsoleSize 110 42
     while ($true) {
         $script:Quiet = $true
         try { $model = Get-StatusModel } finally { $script:Quiet = $false }
-        Clear-Screen
-        Show-Banner
-        if ($script:Notice) { Say-Wrapped '  ' 'Text' $script:Notice 'Amber'; Say '' }
-        Show-StatusBox $model
-        Say ''
         $items = Get-MenuItems $model
+        # Fit the window: drop the spacer rows in the status box first, then the big banner.
+        $rows = Get-StatusRows $model
+        $spacers = 0; foreach ($row in $rows) { if ($null -eq $row) { $spacers++ } }
+        $rest = 1 + $items.Count + 4 + 1
+        if ($script:Notice) { $rest += 1 + (Split-Wrap $script:Notice ($script:W - 2)).Count }
+        $height = Get-ConsoleHeight
+        $compact = (9 + $rows.Count + 2 + $rest) -gt $height
+        $small = $compact -and ((9 + $rows.Count + 2 - $spacers + $rest) -gt $height)
+        Clear-Screen
+        Show-Banner -Small:$small
+        if ($script:Notice) { Say-Wrapped '  ' 'Text' $script:Notice 'Amber'; Say '' }
+        Show-StatusBox $model -Compact:$compact
+        Say ''
         # Start on the row most likely wanted: Wait when a friend has the world, else the first usable one.
         $selected = -1
         for ($i = 0; $i -lt $items.Count; $i++) { if (-not $items[$i].Why) { $selected = $i; break } }
