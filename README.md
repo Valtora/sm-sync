@@ -13,6 +13,9 @@ play and upload, so two copies can never go out of sync.
 | `sm-sync.config.example.json` | Template for the settings file. |
 | `sm-sync.config.json` | The real settings: R2 keys and the GitHub update token. Untracked, never commit it. |
 | `FRIEND-INSTRUCTIONS.txt` | Plain instructions for the other player. |
+| `dev\make-friend-zip.ps1` | Builds the zip you send to the other player. |
+| `dev\simulate-friend.ps1` | Runs that zip as a second player on this PC. |
+| `dev\test\run-tests.ps1` | End-to-end tests against a local stand-in for R2 and GitHub. |
 
 ## Setup
 
@@ -33,7 +36,8 @@ token.
 1. GitHub, **Settings**, **Developer settings**, **Fine-grained tokens**, **Generate new token**.
 2. Repository access: **Only select repositories**, pick `sm-sync`.
 3. Permissions: **Contents: Read-only**. Nothing else.
-4. Expiry: one year is the maximum. Note the date, because updates stop when it expires.
+4. Expiry: your choice. With an expiry date, updates stop on that day until you issue a
+   new token. Without one, a leaked zip stays usable until you delete the token.
 5. Paste it into `GitHubToken` in `sm-sync.config.json`.
 
 A copy that sits inside a git checkout never updates itself. That is the developer copy.
@@ -58,8 +62,21 @@ That copy has no `.git`, so it also exercises the real self-update.
 Press **1**. The tool downloads the newest world, checks it out to you, starts the game,
 waits for you to quit, uploads, and makes the world available again. The window must stay open while you play.
 
-If the window was closed or the upload failed, press **2** afterwards. The world stays
-checked out to you until an upload succeeds.
+After the upload it asks for an optional note for the next player ("fuel is in the red
+chest"). The prompt closes by itself after 60 seconds, and the world is already available
+by then.
+
+If the window is closed while the game runs, a hidden helper process uploads the world when
+the game exits and shows a Windows notification. If an upload fails, press **2**. The world
+stays checked out to you until an upload succeeds.
+
+**W** waits for the other player: it looks once a minute, then beeps and shows a
+notification when the world is available. It does not check the world out.
+
+### Playing at the same time
+
+One player presses **1** and hosts. The other does not use the tool: they start the game
+from Steam and join through the friends list. Only the host checks out and uploads.
 
 ## How the save is protected
 
@@ -75,13 +92,32 @@ checked out to you until an upload succeeds.
 - An upload is refused when the save has a leftover SQLite journal (the game crashed) or
   is not a SQLite file.
 - Network failures are retried three times. A failed upload never releases the check-out.
+- The state file is written with a conditional PUT (`If-Match` on its ETag). If two players
+  act in the same second, the second write is refused and that player is told to look again.
+- Uploads from the menu window and from the background helper are serialised by a named
+  mutex, so one session is never uploaded twice at once.
 
 ## Storage layout
 
 ```
-<SaveName>/state.json     holder, heldSince, version, minVersion, history[5]
-<SaveName>/v000007.db     one object per uploaded version, oldest pruned beyond 5
+<SaveName>/state.json       holder, heldSince, version, minVersion, history[5]
+<SaveName>/v000007.db.gz    one gzip object per version, oldest pruned beyond 5
 ```
+
+Each history entry holds `version, sha256, size, by, at, gz, stored, note`. The hash is of the
+uncompressed save. Versions uploaded before 0.2.0 are plain `.db` objects and still restore.
+A 32 MB save compresses to about 9 MB.
+
+## Tests
+
+```
+dev\test\run-tests.ps1
+```
+
+Two players, one on Windows PowerShell 5.1 and one on PowerShell 7, run through check-out,
+refusal, upload, download, notes, history pruning, restore, the background helper, forced
+check-out, the failure cases and a self-update. Needs python for the fake server. Run it
+before tagging a release, because a tag installs itself on the other player's PC.
 
 ## Releasing an update
 
@@ -101,6 +137,8 @@ the state format, and every older copy refuses to sync until it has updated.
 ## Troubleshooting
 
 - Log: `%LOCALAPPDATA%\SMSync\sm-sync.log`.
+- `sm-sync.ps1 -Action doctor` checks the keys, that the storage honours conditional writes,
+  the update token, and that the game can be found.
 - `sm-sync.ps1 -Action selftest` checks request signing against Amazon's published example.
 - `-Action status|play|finish|take|update` run without the menu. `-Plain` turns colours off.
 - Steam Cloud also syncs the save folder per account. On a Cloud conflict, keep the

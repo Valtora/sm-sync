@@ -9,12 +9,14 @@ SETUP (once)
    "Run anyway". If it shows "Open File - Security Warning", click "Run".
 3. A black and orange window opens and asks for your name. Type it and press Enter.
    Use a different name from your friend.
+4. It asks whether to put a shortcut on your desktop. Press Y.
+   From now on, ALWAYS start the game with that shortcut, never from Steam.
 
 
 EVERY TIME YOU WANT TO PLAY
 
 1. Make sure Scrap Mechanic is closed.
-2. Double-click "Scrap Mechanic Sync".
+2. Double-click the "Scrap Mechanic (shared world)" shortcut on your desktop.
 3. Look at the box at the top. The "World" line says who has the world.
 4. If it says AVAILABLE (or CHECKED OUT BY YOU), press 1.
 5. The game starts by itself. LEAVE THE WINDOW OPEN while you play.
@@ -22,7 +24,16 @@ EVERY TIME YOU WANT TO PLAY
 7. When you are done, quit the game completely (back to the desktop).
 8. Wait for the green line that says:
        "The world is uploaded and available for the next player."
-   Now you can close the window or turn the PC off.
+9. It then asks for a note for your friend, for example what you built. Type one and
+   press Enter, or just press Enter to skip. Now you can close the window.
+
+If your friend has the world and you want to know when they are done, press W and leave
+the window open. It beeps when the world is available.
+
+PLAYING TOGETHER AT THE SAME TIME
+
+Only ONE of you uses this tool: that person presses 1 and hosts. The other starts Scrap
+Mechanic from Steam as normal and joins through the friends list.
 
 
 IF SOMETHING LOOKS WRONG
@@ -35,8 +46,12 @@ IF SOMETHING LOOKS WRONG
 Steam asks about a "Cloud conflict"
    Choose the LOCAL files.
 
-You closed the window by accident, or the upload failed
-   Quit the game, open "Scrap Mechanic Sync" again and press 2.
+You closed the window by accident while playing
+   Nothing to do. The upload still happens when you quit the game, and Windows shows
+   a notification saying how it went.
+
+The upload failed
+   Open the tool again and press 2.
 
 Red text
    It always says what happened and what to do. If you are not sure, take a photo of

@@ -13,22 +13,24 @@ Without the menu:  sm-sync.ps1 -Action play|finish|status|take|update|selftest
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('menu', 'play', 'finish', 'status', 'take', 'update', 'selftest')]
+    [ValidateSet('menu', 'play', 'finish', 'status', 'take', 'update', 'selftest', 'wait', 'watchdog', 'doctor')]
     [string]$Action = 'menu',
     [switch]$NoLaunch,     # play: check out and download, but do not start the game
     [switch]$Force,        # play/finish: override the other player's check-out
     [switch]$Yes,          # answer yes to every confirmation
     [switch]$Plain,        # no colours, boxes or progress bars
     [switch]$NoUpdate,     # skip the update check
-    [string]$UpdatedFrom   # set by the updater when it relaunches the new version
+    [string]$UpdatedFrom,  # set by the updater when it relaunches the new version
+    [string]$Note,         # finish: the session note, instead of asking for one
+    [int]$ParentPid        # watchdog: the menu window that started it
 )
 
 $ErrorActionPreference = 'Stop'
 
 # Bump Version for every release and tag the commit v<Version>.
 # Bump MinPeerVersion only when older copies must not touch the shared state any more.
-$script:Version        = '0.1.1'
-$script:MinPeerVersion = '0.1.0'
+$script:Version        = '0.2.0'
+$script:MinPeerVersion = '0.2.0'
 
 $script:SteamAppId   = '387990'
 $script:GameProcess  = 'ScrapMechanic'
@@ -50,8 +52,10 @@ $script:LogPath = Join-Path $script:HomeDir 'sm-sync.log'
 
 # ================================================================ console
 
-$script:Interactive = -not [Console]::IsInputRedirected
-$script:Fancy = (-not $Plain) -and $Host.UI.SupportsVirtualTerminal -and ((-not [Console]::IsOutputRedirected) -or $env:SMSYNC_FORCE_FANCY)
+# The watchdog runs hidden with nobody to answer a question, so it never asks one.
+$script:Unattended = ($Action -eq 'watchdog')
+$script:Interactive = (-not [Console]::IsInputRedirected) -and (-not $script:Unattended)
+$script:Fancy = (-not $Plain) -and (-not $script:Unattended) -and $Host.UI.SupportsVirtualTerminal -and ((-not [Console]::IsOutputRedirected) -or $env:SMSYNC_FORCE_FANCY)
 $script:E = [string][char]27
 $script:W = 72
 
@@ -210,9 +214,49 @@ function Wait-Key([string]$Text = 'Press any key to go back to the menu') {
 
 function Confirm-Yes([string]$Question) {
     if ($script:AssumeYes) { return $true }
+    if ($script:Unattended) { return $false }
     Say ''
     Write-Seg @("  $Question ", 'Amber', '[Y] yes   [N] no', 'Dim')
     return ((Read-Key 'YN') -eq 'Y')
+}
+
+function Read-LineTimeout([string]$Prompt, [int]$Seconds) {
+    # Like Read-Line, but gives up after $Seconds without a keypress and returns what was typed.
+    if (-not $script:Interactive) { return '' }
+    Write-Seg @("  $Prompt ", 'Amber', '', 'Text') -NoNewline
+    $typed = New-Object System.Text.StringBuilder
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        if (-not [Console]::KeyAvailable) { Start-Sleep -Milliseconds 50; continue }
+        $key = [Console]::ReadKey($true)
+        $deadline = (Get-Date).AddSeconds($Seconds)
+        if ($key.Key -eq [ConsoleKey]::Enter) { break }
+        if ($key.Key -eq [ConsoleKey]::Escape) { [void]$typed.Clear(); break }
+        if ($key.Key -eq [ConsoleKey]::Backspace) {
+            if ($typed.Length -gt 0) { [void]$typed.Remove($typed.Length - 1, 1); Write-Host "`b `b" -NoNewline }
+            continue
+        }
+        if (-not [char]::IsControl($key.KeyChar) -and $typed.Length -lt 200) { [void]$typed.Append($key.KeyChar); Write-Host $key.KeyChar -NoNewline }
+    }
+    Write-Host ''
+    return $typed.ToString().Trim()
+}
+
+function Show-Toast([string]$Title, [string]$Text) {
+    # A Windows notification. Best effort: a failure here must never break a sync.
+    if ($env:SMSYNC_NO_TOAST) { Write-Log "toast: $Text"; return }
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        if (-not $script:Tray) {
+            $script:Tray = New-Object System.Windows.Forms.NotifyIcon
+            $script:Tray.Icon = [System.Drawing.SystemIcons]::Information
+            $script:Tray.Text = 'Scrap Mechanic Sync'
+            $script:Tray.Visible = $true
+        }
+        $script:Tray.ShowBalloonTip(10000, $Title, $Text, [System.Windows.Forms.ToolTipIcon]::Info)
+    }
+    catch { Write-Log "toast failed: $($_.Exception.Message)" }
 }
 
 function Show-Progress([string]$Label, [long]$Done, [long]$Total, [datetime]$Start, [switch]$Final) {
@@ -387,7 +431,8 @@ function Invoke-SelfTest {
 # ================================================================ remote storage
 
 function Invoke-RemoteOnce {
-    param([string]$Method, [string]$Key, [byte[]]$Body, [string]$InFile, [string]$OutFile, [string]$Label)
+    param([string]$Method, [string]$Key, [byte[]]$Body, [string]$InFile, [string]$OutFile, [string]$Label,
+          [string]$IfMatch, [switch]$IfNoneMatch)
 
     $cfg = $script:Config
     $base = [Uri]($cfg.Endpoint.TrimEnd('/'))
@@ -422,6 +467,9 @@ function Invoke-RemoteOnce {
         [void]$request.Headers.TryAddWithoutValidation('x-amz-date', $amzDate)
         [void]$request.Headers.TryAddWithoutValidation('x-amz-content-sha256', $payloadHash)
         [void]$request.Headers.TryAddWithoutValidation('Authorization', $auth)
+        # Conditional writes: the storage refuses the PUT (412) if the object changed since we read it.
+        if ($IfMatch) { [void]$request.Headers.TryAddWithoutValidation('If-Match', $IfMatch) }
+        if ($IfNoneMatch) { [void]$request.Headers.TryAddWithoutValidation('If-None-Match', '*') }
 
         $start = Get-Date
         if ($Label -and -not $script:Fancy) { Say-Step "$Label ..." }
@@ -441,6 +489,8 @@ function Invoke-RemoteOnce {
         $text = ''
         $length = 0L
         if ($null -ne $response.Content.Headers.ContentLength) { $length = [long]$response.Content.Headers.ContentLength }
+        $etag = ''
+        if ($response.Headers.ETag) { $etag = $response.Headers.ETag.ToString() }
 
         if ($ok -and $OutFile) {
             $remote = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
@@ -467,6 +517,11 @@ function Invoke-RemoteOnce {
                 return [pscustomobject]@{ Status = 404; Text = $text; Length = 0L }
             }
             Write-Log "HTTP $status on $Method $Key : $text"
+            if ($status -eq 412 -or $status -eq 409) {
+                $conflict = New-SyncError 'Someone else changed the shared world at the same moment.' 'Go back to the menu and look at the status box before doing anything else.'
+                $conflict.Data['Conflict'] = $true
+                throw $conflict
+            }
             if ($status -ge 500 -or $status -eq 429) {
                 throw (New-SyncError "The online storage is having trouble (code $status)." 'Wait a minute and try again. Nothing has been lost.' -Transient)
             }
@@ -481,7 +536,7 @@ function Invoke-RemoteOnce {
             }
             throw (New-SyncError "The storage refused the request (code $status)." "Try again. If it keeps happening, send this file to whoever set this up: $script:LogPath")
         }
-        return [pscustomobject]@{ Status = $status; Text = $text; Length = $length }
+        return [pscustomobject]@{ Status = $status; Text = $text; Length = $length; ETag = $etag }
     }
     finally {
         Close-Progress
@@ -492,7 +547,8 @@ function Invoke-RemoteOnce {
 }
 
 function Invoke-Remote {
-    param([string]$Method, [string]$Key, [byte[]]$Body, [string]$InFile, [string]$OutFile, [string]$Label)
+    param([string]$Method, [string]$Key, [byte[]]$Body, [string]$InFile, [string]$OutFile, [string]$Label,
+          [string]$IfMatch, [switch]$IfNoneMatch)
     $max = 3
     for ($attempt = 1; ; $attempt++) {
         try { return (Invoke-RemoteOnce @PSBoundParameters) }
@@ -512,7 +568,16 @@ function Invoke-Remote {
     }
 }
 
-function Get-VersionKey([int]$Version) { return ('{0}/v{1:D6}.db' -f $script:Prefix, $Version) }
+function Get-VersionKey([hashtable]$Entry) {
+    $key = '{0}/v{1:D6}.db' -f $script:Prefix, $Entry.version
+    if ($Entry.gz) { $key += '.gz' }
+    return $key
+}
+
+function Test-Conflict($ErrorRecord) {
+    $sync = Get-SyncException $ErrorRecord
+    return [bool]($sync -and $sync.Data.Contains('Conflict'))
+}
 
 function Read-State {
     $r = Invoke-Remote -Method 'GET' -Key $script:StateKey
@@ -525,7 +590,8 @@ function Read-State {
     $history = @()
     foreach ($h in @($o.history)) {
         if ($h) {
-            $history += @{ version = [int]$h.version; sha256 = [string]$h.sha256; size = [long]$h.size; by = [string]$h.by; at = (ConvertTo-IsoString $h.at) }
+            $history += @{ version = [int]$h.version; sha256 = [string]$h.sha256; size = [long]$h.size; by = [string]$h.by; at = (ConvertTo-IsoString $h.at)
+                gz = [bool]$h.gz; stored = [long]$h.stored; note = [string]$h.note }
         }
     }
     return @{
@@ -534,6 +600,7 @@ function Read-State {
         version    = [int]$o.version
         minVersion = $min
         history    = $history
+        etag       = $r.ETag
     }
 }
 
@@ -545,10 +612,19 @@ function Write-State([hashtable]$State) {
     $doc = [ordered]@{
         holder = $State.holder; heldSince = $State.heldSince; version = $State.version; minVersion = $min
         writtenBy = "sm-sync $script:Version"
-        history = @($State.history | ForEach-Object { [ordered]@{ version = $_.version; sha256 = $_.sha256; size = $_.size; by = $_.by; at = $_.at } })
+        history = @($State.history | ForEach-Object {
+            [ordered]@{ version = $_.version; sha256 = $_.sha256; size = $_.size; by = $_.by; at = $_.at
+                gz = [bool]$_.gz; stored = [long]$_.stored; note = [string]$_.note } })
     }
     $json = ConvertTo-Json -InputObject $doc -Depth 5
-    [void](Invoke-Remote -Method 'PUT' -Key $script:StateKey -Body ([Text.Encoding]::UTF8.GetBytes($json)))
+    $body = [Text.Encoding]::UTF8.GetBytes($json)
+    # Only write if the state is still the one we read. Two players acting in the same
+    # second would otherwise both believe they had checked the world out.
+    if ($State.etag) { $r = Invoke-Remote -Method 'PUT' -Key $script:StateKey -Body $body -IfMatch $State.etag }
+    elseif ($State.isNew) { $r = Invoke-Remote -Method 'PUT' -Key $script:StateKey -Body $body -IfNoneMatch }
+    else { $r = Invoke-Remote -Method 'PUT' -Key $script:StateKey -Body $body }
+    $State.etag = $r.ETag
+    $State.isNew = $false
 }
 
 # ================================================================ local setup
@@ -672,6 +748,32 @@ function Backup-LocalSave([string]$Reason) {
 
 # ================================================================ core operations
 
+function Compress-File([string]$Source, [string]$Destination) {
+    $in = [IO.File]::Open($Source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    try {
+        $out = [IO.File]::Create($Destination)
+        try {
+            $gz = New-Object System.IO.Compression.GZipStream -ArgumentList $out, ([System.IO.Compression.CompressionLevel]::Optimal)
+            try { $in.CopyTo($gz) } finally { $gz.Dispose() }
+        }
+        finally { $out.Dispose() }
+    }
+    finally { $in.Dispose() }
+}
+
+function Expand-File([string]$Source, [string]$Destination) {
+    $in = [IO.File]::OpenRead($Source)
+    try {
+        $gz = New-Object System.IO.Compression.GZipStream -ArgumentList $in, ([System.IO.Compression.CompressionMode]::Decompress)
+        try {
+            $out = [IO.File]::Create($Destination)
+            try { $gz.CopyTo($out) } finally { $out.Dispose() }
+        }
+        finally { $gz.Dispose() }
+    }
+    finally { $in.Dispose() }
+}
+
 function Publish-Save([hashtable]$State) {
     # Uploads the local save as a new version and checks the world back in.
     if (-not (Test-Path -LiteralPath $script:SavePath)) {
@@ -682,8 +784,8 @@ function Publish-Save([hashtable]$State) {
     $hash = Get-FileSha256 $script:SavePath
     $size = (Get-Item -LiteralPath $script:SavePath).Length
 
-    $history = @(); $version = 0; $min = ''
-    if ($State) { $history = @($State.history); $version = $State.version; $min = $State.minVersion }
+    $history = @(); $version = 0; $min = ''; $etag = ''; $isNew = $true
+    if ($State) { $history = @($State.history); $version = $State.version; $min = $State.minVersion; $etag = $State.etag; $isNew = $false }
     $dropped = @()
 
     if ($history.Count -gt 0 -and $history[0].sha256 -eq $hash) {
@@ -691,13 +793,20 @@ function Publish-Save([hashtable]$State) {
     }
     else {
         $version++
-        $key = Get-VersionKey $version
-        [void](Invoke-Remote -Method 'PUT' -Key $key -InFile $script:SavePath -Label 'Uploading')
-        $head = Invoke-Remote -Method 'HEAD' -Key $key
-        if ($head.Status -ne 200 -or $head.Length -ne $size) {
-            throw (New-SyncError 'The upload did not arrive in one piece.' 'The world is still checked out to you. Choose Finish session to send it again.')
+        $entry = @{ version = $version; sha256 = $hash; size = $size; by = $script:Player; at = [DateTime]::UtcNow.ToString('o'); gz = $true; stored = 0L; note = '' }
+        $packed = Join-Path $script:HomeDir 'upload.db.gz'
+        Say-Step 'Packing the world ...'
+        Compress-File $script:SavePath $packed
+        try {
+            $entry.stored = (Get-Item -LiteralPath $packed).Length
+            $key = Get-VersionKey $entry
+            [void](Invoke-Remote -Method 'PUT' -Key $key -InFile $packed -Label 'Uploading')
+            $head = Invoke-Remote -Method 'HEAD' -Key $key
+            if ($head.Status -ne 200 -or $head.Length -ne $entry.stored) {
+                throw (New-SyncError 'The upload did not arrive in one piece.' 'The world is still checked out to you. Choose Finish session to send it again.')
+            }
         }
-        $entry = @{ version = $version; sha256 = $hash; size = $size; by = $script:Player; at = [DateTime]::UtcNow.ToString('o') }
+        finally { Remove-Item -LiteralPath $packed -Force -ErrorAction SilentlyContinue }
         $history = @($entry) + $history
         if ($history.Count -gt $script:KeepOnline) {
             $dropped = @($history | Select-Object -Skip $script:KeepOnline)
@@ -705,10 +814,10 @@ function Publish-Save([hashtable]$State) {
         }
     }
 
-    Write-State @{ holder = ''; heldSince = ''; version = $version; minVersion = $min; history = $history }
+    Write-State @{ holder = ''; heldSince = ''; version = $version; minVersion = $min; history = $history; etag = $etag; isNew = $isNew }
     Write-Log "published version $version ($size bytes) and checked the world in"
     foreach ($old in $dropped) {
-        try { [void](Invoke-Remote -Method 'DELETE' -Key (Get-VersionKey $old.version)) }
+        try { [void](Invoke-Remote -Method 'DELETE' -Key (Get-VersionKey $old)) }
         catch { Write-Log "could not delete old version $($old.version)" }
     }
     Say-Good 'The world is uploaded and available for the next player.'
@@ -731,17 +840,28 @@ function Receive-Save([hashtable]$Entry, [switch]$SkipNewerCheck) {
     }
     Backup-LocalSave 'before-download'
     $temp = $script:SavePath + '.download'
-    [void](Invoke-Remote -Method 'GET' -Key (Get-VersionKey $Entry.version) -OutFile $temp -Label 'Downloading')
+    $damaged = New-SyncError 'The download was damaged on the way.' 'Nothing on this PC was changed. Try again in a minute.'
+    if ($Entry.gz) {
+        $packed = Join-Path $script:HomeDir 'download.db.gz'
+        try {
+            [void](Invoke-Remote -Method 'GET' -Key (Get-VersionKey $Entry) -OutFile $packed -Label 'Downloading')
+            try { Expand-File $packed $temp }
+            catch { Write-Log "unpack failed: $($_.Exception.Message)"; Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue; throw $damaged }
+        }
+        finally { Remove-Item -LiteralPath $packed -Force -ErrorAction SilentlyContinue }
+    }
+    else {
+        [void](Invoke-Remote -Method 'GET' -Key (Get-VersionKey $Entry) -OutFile $temp -Label 'Downloading')
+    }
     if ((Get-FileSha256 $temp) -ne $Entry.sha256) {
         Remove-Item -LiteralPath $temp -Force
-        throw (New-SyncError 'The download was damaged on the way.' 'Nothing on this PC was changed. Try again in a minute.')
+        throw $damaged
     }
     Move-Item -LiteralPath $temp -Destination $script:SavePath -Force
     Write-Log "downloaded version $($Entry.version)"
     Say-Good 'Downloaded and checked.'
     return $true
 }
-
 function Get-OrSeedState {
     $state = Read-State
     if ($state) { return $state }
@@ -783,13 +903,57 @@ function Enter-Turn([switch]$Override) {
         Say-Warn ("Forcing the check-out away from {0}. Anything they played since {1} is now out of sync." -f $state.holder, (Format-When (Get-Current $state).at))
         Write-Log "forced takeover from $($state.holder)"
     }
-    if (-not (Receive-Save (Get-Current $state))) { return $false }
-    Set-Holder $state
+    $current = Get-Current $state
+    if (-not (Receive-Save $current)) { return $false }
+    try { Set-Holder $state }
+    catch {
+        if (-not (Test-Conflict $_)) { throw }
+        Say-Bad 'Someone else checked the world out a moment before you.'
+        Say-Wrapped '      ' 'Text' 'Nothing is lost. Go back to the menu and look at the status box.' 'Dim'
+        return $false
+    }
     Say-Good 'The world is now checked out to you.'
+    if ($current.note) { Say ''; Say-Wrapped ("      Note from {0}: " -f $current.by) 'Dim' $current.note 'Amber' }
     return $true
 }
 
 function Exit-Turn([switch]$Override) {
+    # One upload at a time on this PC: the menu window and the background watchdog can
+    # both decide to finish the same session.
+    $mutex = New-Object System.Threading.Mutex($false, 'SMSyncPublish')
+    try { [void]$mutex.WaitOne() } catch [System.Threading.AbandonedMutexException] { }
+    try { Exit-TurnCore -Override:$Override }
+    finally { $mutex.ReleaseMutex(); $mutex.Dispose() }
+}
+
+function Add-SessionNote {
+    # Attaches a short note to the version this player just uploaded. The upload has
+    # already happened, so an unanswered prompt never delays the hand-over.
+    if ($script:Unattended) { return }
+    $text = $Note
+    if (-not $text) {
+        Say ''
+        Say '      Leave a note for the next player? For example what you built or changed.' 'Dim'
+        $text = Read-LineTimeout 'Note (Enter to skip, closes by itself after 60 seconds):' 60
+    }
+    $text = ($text -replace '[\x00-\x1F]', ' ').Trim()
+    if ($text.Length -gt 200) { $text = $text.Substring(0, 200) }
+    if (-not $text) { return }
+    for ($try = 1; $try -le 2; $try++) {
+        $state = Read-State
+        if (-not $state -or $state.history.Count -eq 0 -or $state.history[0].by -ne $script:Player) { return }
+        $state.history[0].note = $text
+        try { Write-State $state; Say-Good 'Note saved.'; return }
+        catch {
+            if ($try -lt 2 -and (Test-Conflict $_)) { continue }
+            Write-Log "note not saved: $((Get-ExceptionChain $_)[-1].Message)"
+            Say-Warn 'The note could not be saved. The world itself is uploaded.'
+            return
+        }
+    }
+}
+
+function Exit-TurnCore([switch]$Override) {
     Assert-GameClosed
     $script:Seeded = $false
     $state = Get-OrSeedState
@@ -807,6 +971,7 @@ function Exit-Turn([switch]$Override) {
         if (-not (Confirm-Yes 'Upload your copy anyway and make it the shared world?')) { return }
     }
     Publish-Save $state
+    Add-SessionNote
 }
 
 function Start-PlaySession {
@@ -823,9 +988,11 @@ function Start-PlaySession {
         return
     }
     Say-Good 'The game is running.'
+    Start-Watchdog
     Say ''
     Say '      LEAVE THIS WINDOW OPEN.' 'Amber'
     Say '      It uploads the world by itself when you quit the game.' 'Text'
+    Say '      If this window gets closed, the upload still happens in the background.' 'Dim'
     Say '      If Steam asks about a Cloud conflict, choose the LOCAL files.' 'Dim'
     Say ''
     $start = Get-Date
@@ -888,6 +1055,10 @@ function Show-StatusBox($Model) {
             $hint = 'Ready. Press 1 to play.'; $hintColor = 'Good'
         }
         Write-BoxRow @('Last save ', 'Dim', ("version {0}" -f $c.version), 'Text', ("   {0} ({1}) by {2}   {3}" -f (Format-When $c.at), (Format-Ago $c.at), $c.by, (Format-Size $c.size)), 'Dim')
+        if ($c.note) {
+            $label = 'Note      '
+            foreach ($line in (Split-Wrap ('"' + $c.note + '"') ($script:W - 14))) { Write-BoxRow @($label, 'Dim', $line, 'Amber'); $label = '          ' }
+        }
         switch ($Model.Local) {
             'same'      { Write-BoxRow @('This PC   ', 'Dim', 'up to date', 'Good') }
             'different' { Write-BoxRow @('This PC   ', 'Dim', 'different from the shared world', 'Amber') }
@@ -910,6 +1081,7 @@ function Show-StatusPlain {
     else { Say '  World:        available' 'Good' }
     Say ("  Last upload:  {0} by {1} (version {2}, {3})" -f (Format-When $c.at), $c.by, $c.version, (Format-Size $c.size))
     Say ("  Online:       versions {0}" -f (($s.history | ForEach-Object { $_.version }) -join ', '))
+    if ($c.note) { Say "  Note:         $($c.note)" }
     Say "  Your copy:    $($m.Local)"
 }
 
@@ -965,13 +1137,21 @@ function Show-Help {
             'When you quit the game, this tool uploads your progress and the world becomes available again.',
             'If you both played at the same time there would be two different worlds, out of sync, and one would have to be thrown away. Checking out stops that from happening.')),
         @('THE MENU', @(
-            '[1] PLAY: the normal way to play. Gets the newest world, starts the game, waits, and uploads when you quit. Leave the window open.',
-            '[2] FINISH SESSION: uploads your progress now and makes the world available. Use it if the window was closed while you played, or if an upload failed.',
+            '[1] PLAY: the normal way to play. Gets the newest world, starts the game, waits, and uploads when you quit. Afterwards you can leave a short note for the next player.',
+            '[2] FINISH SESSION: uploads your progress now and makes the world available. Use it if an upload failed or you played without pressing 1.',
             '[3] RESTORE A BACKUP: brings back an older copy, from this PC or from the last 5 uploads kept online.',
-            '[4] FORCE CHECK-OUT: only when your friend forgot to finish and cannot do it. You get the last uploaded world. Whatever they played since then is out of sync and will not be in the shared world.')),
+            '[4] FORCE CHECK-OUT: only when your friend forgot to finish and cannot do it. You get the last uploaded world. Whatever they played since then is out of sync and will not be in the shared world.',
+            '[W] WAIT FOR THE WORLD: when your friend has it, leave this open. It beeps and shows a Windows notification the moment the world is available.',
+            '[S] DESKTOP SHORTCUT: puts a shortcut to this tool on your desktop. Always start the game from it, not from Steam.')),
+        @('PLAYING TOGETHER AT THE SAME TIME', @(
+            'When you are both online you can still play together the normal way.',
+            'ONE of you presses 1 here and hosts the world. The other does NOT use this tool at all: they open Scrap Mechanic from Steam and join the host through the friends list.',
+            'Only the host has the world checked out, and only the host uploads at the end. The guest never needs to check anything out.',
+            'Next time, either of you can be the one who presses 1.')),
         @('IF SOMETHING GOES WRONG', @(
             'Red or yellow text always says what happened and what to do next. Nothing is deleted without a backup first.',
             'NO INTERNET: the world stays checked out to you. Fix the connection and choose Finish session. Your friend just has to wait.',
+            'YOU CLOSED THIS WINDOW WHILE PLAYING: the upload still happens in the background when you quit the game, and a Windows notification tells you how it went.',
             'STEAM CLOUD CONFLICT: when Steam asks, always choose the LOCAL files.',
             'YOU PLAYED WITHOUT THIS TOOL: open it and choose Finish session. It will warn you and ask before uploading.',
             "BACKUPS are in: $script:BackupDir",
@@ -982,6 +1162,150 @@ function Show-Help {
         foreach ($para in $pages[$p][1]) { Say-Wrapped '  ' 'Text' $para; Say '' }
         if ($p -lt $pages.Count - 1) { Wait-Key 'Press any key for the next page' } else { Wait-Key }
     }
+}
+
+# ================================================================ background uploader, waiting, shortcut
+
+function Start-Watchdog {
+    # A hidden copy of this script that outlives the menu window. If the window is closed
+    # while the game runs, it uploads the world when the game exits.
+    try {
+        $shell = (Get-Process -Id $PID).Path
+        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $PSCommandPath), '-Action', 'watchdog', '-ParentPid', $PID)
+        Start-Process -FilePath $shell -ArgumentList $arguments -WindowStyle Hidden | Out-Null
+    }
+    catch { Write-Log "could not start the background uploader: $($_.Exception.Message)" }
+}
+
+function Invoke-Watchdog {
+    Write-Log "watchdog: started for window $ParentPid"
+    while ($true) {
+        do {
+            while (Test-GameRunning) { Start-Sleep -Seconds 3 }
+            Start-Sleep -Seconds 5
+        } while (Test-GameRunning)
+        # The game is closed. While the menu window lives, the upload is its job.
+        $windowAlive = $false
+        while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
+            $windowAlive = $true
+            if (Test-GameRunning) { Write-Log 'watchdog: a new session started from the window, leaving'; return }
+            Start-Sleep -Seconds 2
+        }
+        if (-not (Test-GameRunning)) { break }
+    }
+    $state = Read-State
+    if (-not $state -or $state.holder -ne $script:Player) { Write-Log 'watchdog: nothing to upload'; return }
+    try {
+        Exit-Turn
+        Write-Log 'watchdog: uploaded after the window was closed'
+        Show-Toast 'Scrap Mechanic Sync' 'The world is uploaded and available for the next player.'
+    }
+    catch {
+        Write-Log ("watchdog: upload failed: " + (Get-ExceptionChain $_)[-1].Message)
+        Show-Toast 'Scrap Mechanic Sync' 'The world was NOT uploaded. Open Scrap Mechanic Sync and press 2.'
+    }
+    Start-Sleep -Seconds 12
+}
+
+function Wait-ForAvailable {
+    $interval = 60
+    if ($env:SMSYNC_WAIT_SECONDS) { $interval = [int]$env:SMSYNC_WAIT_SECONDS }
+    Say-Wrapped '  ' 'Text' 'Leave this window open. It looks once a minute, then beeps and shows a Windows notification when the world is available. It does not check the world out for you.'
+    $looks = 0
+    while ($true) {
+        $state = $null
+        try { $state = Read-State } catch { Write-Log ("wait: " + (Get-ExceptionChain $_)[-1].Message) }
+        $looks++
+        if ($state -and -not $state.holder) {
+            try { 1..3 | ForEach-Object { [Console]::Beep(880, 180); Start-Sleep -Milliseconds 90 } } catch { }
+            Show-Toast 'Scrap Mechanic Sync' 'The world is available. Open the menu and press 1 to play.'
+            Say-Good 'The world is AVAILABLE. Go back to the menu and press 1 to play.'
+            $c = Get-Current $state
+            if ($c.note) { Say ''; Say-Wrapped ("      Note from {0}: " -f $c.by) 'Dim' $c.note 'Amber' }
+            return
+        }
+        if ($state -and $state.holder -eq $script:Player) { Say-Step 'The world is already checked out to you.'; return }
+        if (-not $script:Interactive -and $looks -ge 3) { Say-Step 'Still checked out. Stopped waiting.'; return }
+        $who = 'unknown (no connection)'
+        if ($state) { $who = "checked out by $($state.holder)" }
+        Say ''
+        Write-Seg @('      Waiting  ', 'Dim', $who, 'Bad', ("   last looked {0}   press any key to stop" -f (Get-Date -Format 'HH:mm:ss')), 'Dim')
+        $until = (Get-Date).AddSeconds($interval)
+        while ((Get-Date) -lt $until) {
+            if ($script:Interactive -and [Console]::KeyAvailable) { [void][Console]::ReadKey($true); Say-Step 'Stopped waiting.'; return }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+}
+
+function Find-GameExe {
+    try {
+        $steam = (Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -ErrorAction Stop).SteamPath
+        $libraries = @($steam)
+        $vdf = Join-Path $steam 'steamapps\libraryfolders.vdf'
+        if (Test-Path -LiteralPath $vdf) {
+            foreach ($m in [regex]::Matches((Get-Content -LiteralPath $vdf -Raw), '"path"\s+"([^"]+)"')) { $libraries += $m.Groups[1].Value.Replace('\\', '\') }
+        }
+        foreach ($library in $libraries) {
+            $exe = Join-Path $library 'steamapps\common\Scrap Mechanic\Release\ScrapMechanic.exe'
+            if (Test-Path -LiteralPath $exe) { return $exe }
+        }
+    }
+    catch { }
+    return $null
+}
+
+function New-DesktopShortcut {
+    $path = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Scrap Mechanic (shared world).lnk'
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($path)
+    $shortcut.TargetPath = Join-Path $PSScriptRoot 'Scrap Mechanic Sync.cmd'
+    $shortcut.WorkingDirectory = $PSScriptRoot
+    $shortcut.Description = 'Play the shared Scrap Mechanic world'
+    $exe = Find-GameExe
+    if ($exe) { $shortcut.IconLocation = "$exe,0" }
+    $shortcut.Save()
+    Write-Log "desktop shortcut created: $path"
+    return $path
+}
+
+function Request-ShortcutOnce {
+    # Tests and the second-player simulator set SMSYNC_HOME, and must not touch the desktop.
+    if ($env:SMSYNC_HOME -or -not $script:Interactive) { return }
+    $marker = Join-Path $script:HomeDir 'shortcut-asked.txt'
+    if (Test-Path -LiteralPath $marker) { return }
+    Clear-Screen
+    Show-Banner
+    Say-Wrapped '  ' 'Text' 'To keep the shared world in sync, always start the game from this tool and never straight from Steam. A desktop shortcut makes that the easy thing to do.'
+    if (Confirm-Yes 'Put a "Scrap Mechanic (shared world)" shortcut on your desktop?') {
+        try { [void](New-DesktopShortcut); Say-Good 'The shortcut is on your desktop.' } catch { Show-Error $_ }
+        Wait-Key 'Press any key to continue'
+    }
+    Set-Content -LiteralPath $marker -Value (Get-Date -Format 'o') -Encoding ASCII
+}
+
+function Invoke-Doctor {
+    # Checks the things that cannot be seen from the menu.
+    Say-Step "Version $script:Version. Save file: $script:SavePath"
+    [void](Read-State)
+    Say-Good 'The online storage is reachable and the keys work.'
+    $key = "$script:Prefix/_doctor.txt"
+    $body = [byte[]](120)
+    try { [void](Invoke-Remote -Method 'DELETE' -Key $key) } catch { }
+    [void](Invoke-Remote -Method 'PUT' -Key $key -Body $body -IfNoneMatch)
+    $refused = $false
+    try { [void](Invoke-Remote -Method 'PUT' -Key $key -Body $body -IfNoneMatch) }
+    catch { if (Test-Conflict $_) { $refused = $true } else { throw } }
+    [void](Invoke-Remote -Method 'DELETE' -Key $key)
+    if ($refused) { Say-Good 'The storage honours conditional writes, so simultaneous check-outs are caught.' }
+    else { Say-Bad 'The storage IGNORES conditional writes. Two players pressing Play in the same second would not be caught.' }
+    if ($script:Config.GitHubToken -and ([string]$script:Config.GitHubToken) -notmatch 'PASTE_') {
+        try { [void](Invoke-GitHub '/tags?per_page=1'); Say-Good 'The update key works.' }
+        catch { Say-Bad ("The update check fails: " + (Get-ExceptionChain $_)[-1].Message) }
+    }
+    else { Say-Warn 'No update key in the settings file, so this copy will not update itself.' }
+    $exe = Find-GameExe
+    if ($exe) { Say-Good "Game found: $exe" } else { Say-Warn 'Game not found through Steam. The desktop shortcut will use a plain icon.' }
 }
 
 # ================================================================ self-update
@@ -1090,10 +1414,12 @@ function Show-Menu {
         Write-Seg @('  [3] ', 'Orange', 'Restore a backup    ', 'Text', 'bring back an older copy of the world', 'Dim')
         Write-Seg @('  [4] ', 'Orange', 'Force check-out     ', 'Text', 'if your friend forgot to finish (their progress goes out of sync)', 'Dim')
         Say ''
-        Write-Seg @('  [R] ', 'Orange', 'Refresh   ', 'Text', '[H] ', 'Orange', 'Help   ', 'Text', '[Q] ', 'Orange', 'Quit', 'Text')
+        Write-Seg @('  [W] ', 'Orange', 'Wait for the world  ', 'Text', 'beep and notify me when my friend has finished', 'Dim')
+        Say ''
+        Write-Seg @('  [S] ', 'Orange', 'Shortcut   ', 'Text', '[R] ', 'Orange', 'Refresh   ', 'Text', '[H] ', 'Orange', 'Help   ', 'Text', '[Q] ', 'Orange', 'Quit', 'Text')
         Say ''
         Write-Seg @('  Press a key: ', 'Amber', '', 'Text') -NoNewline
-        $choice = Read-Key '1234RHQ'
+        $choice = Read-Key '1234WSRHQ'
         Say ''
         switch ($choice) {
             '1' { Invoke-Screen 'Play' { Start-PlaySession } }
@@ -1107,6 +1433,8 @@ function Show-Menu {
                     else { Say-Step 'Cancelled. Nothing was changed.' }
                 }
             }
+            'W' { Invoke-Screen 'Wait for the world' { Wait-ForAvailable } }
+            'S' { Invoke-Screen 'Desktop shortcut' { $made = New-DesktopShortcut; Say-Good 'The shortcut is on your desktop.'; Say "      $made" 'Dim' } }
             'H' { Show-Help }
             'R' { $script:Notice = '' }
             'Q' { return }
@@ -1140,7 +1468,10 @@ try {
     Initialize-Player
     Initialize-SavePath
     switch ($Action) {
-        'menu'   { Show-Menu }
+        'menu'   { Request-ShortcutOnce; Show-Menu }
+        'wait'   { Wait-ForAvailable }
+        'watchdog' { Invoke-Watchdog }
+        'doctor' { Invoke-Doctor }
         'play'   { Start-PlaySession }
         'finish' { Exit-Turn -Override:$Force }
         'status' { Show-StatusPlain }
@@ -1154,6 +1485,7 @@ catch {
 }
 finally {
     Close-Progress
+    if ($script:Tray) { $script:Tray.Dispose() }
     if ($Action -eq 'menu') { Reset-Console }
 }
 exit $exitCode
