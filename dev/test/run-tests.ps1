@@ -81,7 +81,7 @@ try {
 
     Touch A 'progress by A'
     $o = Run A '-Action', 'finish', '-Note', 'Built a bridge. Fuel is in the red chest.'
-    Check 'upload with a note' ((Has $o 'uploaded and available') -and (Has $o 'Note saved'))
+    Check 'upload with a note' ((Has $o 'uploaded and available') -and (Has $o 'Message saved'))
     Check 'uploads are stored compressed' ((Keys) -match 'v000002\.db\.gz')
 
     $o = Run B '-Action', 'play', '-NoLaunch'

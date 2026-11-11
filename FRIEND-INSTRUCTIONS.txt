@@ -24,11 +24,11 @@ EVERY TIME YOU WANT TO PLAY
 7. When you are done, quit the game completely (back to the desktop).
 8. Wait for the green line that says:
        "The world is uploaded and available for the next player."
-9. It then asks for a note for your friend, for example what you built. Type one and
+9. It then asks for a message for your friend, for example what you built. Type one and
    press Enter, or just press Enter to skip. Now you can close the window.
 
 If your friend has the world and you want to know when they are done, press W and leave
-the window open. It beeps when the world is available.
+the window open. Windows shows a notification when the world is available.
 
 PLAYING TOGETHER AT THE SAME TIME
 

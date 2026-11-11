@@ -70,8 +70,12 @@ If the window is closed while the game runs, a hidden helper process uploads the
 the game exits and shows a Windows notification. If an upload fails, press **2**. The world
 stays checked out to you until an upload succeeds.
 
-**W** waits for the other player: it looks once a minute, then beeps and shows a
-notification when the world is available. It does not check the world out.
+**W** waits for the other player: it looks once a minute and shows a Windows
+notification when the world has been uploaded. It does not check the world out.
+
+The menu takes the up and down arrows plus Enter, or the key in brackets. Options that
+cannot be used right now are greyed out with the reason, and **W** and **4** appear only
+while the other player has the world. The status box re-checks itself every 30 seconds.
 
 ### Playing at the same time
 

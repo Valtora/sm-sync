@@ -29,7 +29,7 @@ $ErrorActionPreference = 'Stop'
 
 # Bump Version for every release and tag the commit v<Version>.
 # Bump MinPeerVersion only when older copies must not touch the shared state any more.
-$script:Version        = '0.2.0'
+$script:Version        = '0.2.1'
 $script:MinPeerVersion = '0.2.0'
 
 $script:SteamAppId   = '387990'
@@ -82,14 +82,19 @@ function Write-Seg([object[]]$Parts, [switch]$NoNewline) {
         $sb = New-Object System.Text.StringBuilder
         [void]$sb.Append("$($script:E)[48;2;$($script:Rgb.Bg)m")
         for ($i = 0; $i -lt $Parts.Count; $i += 2) {
-            [void]$sb.Append("$($script:E)[38;2;$($script:Rgb[$Parts[$i + 1]])m").Append([string]$Parts[$i])
+            if ($Parts[$i + 1] -eq 'Sel') {
+                # The selected menu row: black on orange, then back to the normal background.
+                [void]$sb.Append("$($script:E)[48;2;$($script:Rgb.Orange)m$($script:E)[38;2;0;0;0m").Append([string]$Parts[$i]).Append("$($script:E)[48;2;$($script:Rgb.Bg)m")
+            }
+            else { [void]$sb.Append("$($script:E)[38;2;$($script:Rgb[$Parts[$i + 1]])m").Append([string]$Parts[$i]) }
         }
         [void]$sb.Append("$($script:E)[K")
         Write-Host $sb.ToString() -NoNewline:$NoNewline
     }
     else {
         for ($i = 0; $i -lt $Parts.Count; $i += 2) {
-            Write-Host ([string]$Parts[$i]) -NoNewline -ForegroundColor $script:Basic[$Parts[$i + 1]]
+            if ($Parts[$i + 1] -eq 'Sel') { Write-Host ([string]$Parts[$i]) -NoNewline -ForegroundColor Black -BackgroundColor DarkYellow }
+            else { Write-Host ([string]$Parts[$i]) -NoNewline -ForegroundColor $script:Basic[$Parts[$i + 1]] }
         }
         if (-not $NoNewline) { Write-Host '' }
     }
@@ -367,7 +372,20 @@ function ConvertFrom-Iso([string]$Iso) {
 
 function Format-When([string]$Iso) {
     if (-not $Iso) { return 'never' }
-    return (ConvertFrom-Iso $Iso).ToLocalTime().ToString('ddd d MMM HH:mm')
+    return (Format-LocalTime (ConvertFrom-Iso $Iso).ToLocalTime())
+}
+
+function Format-LocalTime([datetime]$Local) {
+    $today = (Get-Date).Date
+    if ($Local.Date -eq $today) { return 'today ' + $Local.ToString('HH:mm') }
+    if ($Local.Date -eq $today.AddDays(-1)) { return 'yesterday ' + $Local.ToString('HH:mm') }
+    return $Local.ToString('ddd d MMM HH:mm')
+}
+
+function Format-Duration([TimeSpan]$Span) {
+    if ($Span.TotalMinutes -lt 1) { return 'less than a minute' }
+    if ($Span.TotalHours -lt 1) { return ('{0}m' -f $Span.Minutes) }
+    return ('{0}h {1:00}m' -f [int][Math]::Floor($Span.TotalHours), $Span.Minutes)
 }
 
 function Format-Ago([string]$Iso) {
@@ -550,6 +568,8 @@ function Invoke-Remote {
     param([string]$Method, [string]$Key, [byte[]]$Body, [string]$InFile, [string]$OutFile, [string]$Label,
           [string]$IfMatch, [switch]$IfNoneMatch)
     $max = 3
+    # Quiet is set while the menu re-checks the status in the background: one try, no messages.
+    if ($script:Quiet) { $max = 1 }
     for ($attempt = 1; ; $attempt++) {
         try { return (Invoke-RemoteOnce @PSBoundParameters) }
         catch {
@@ -821,6 +841,7 @@ function Publish-Save([hashtable]$State) {
         catch { Write-Log "could not delete old version $($old.version)" }
     }
     Say-Good 'The world is uploaded and available for the next player.'
+    if ($entry) { Say ("      Version {0}: {1} sent, {2} unpacked." -f $entry.version, (Format-Size $entry.stored), (Format-Size $entry.size)) 'Dim' }
     Say '      It is safe to close this window or shut down the PC.' 'Dim'
 }
 
@@ -913,7 +934,7 @@ function Enter-Turn([switch]$Override) {
         return $false
     }
     Say-Good 'The world is now checked out to you.'
-    if ($current.note) { Say ''; Say-Wrapped ("      Note from {0}: " -f $current.by) 'Dim' $current.note 'Amber' }
+    if ($current.note) { Say ''; Say-Wrapped ("      Message from {0}: " -f $current.by) 'Dim' $current.note 'Amber' }
     return $true
 }
 
@@ -933,8 +954,10 @@ function Add-SessionNote {
     $text = $Note
     if (-not $text) {
         Say ''
-        Say '      Leave a note for the next player? For example what you built or changed.' 'Dim'
-        $text = Read-LineTimeout 'Note (Enter to skip, closes by itself after 60 seconds):' 60
+        Say '      Leave a message about this save for the next player? For example what you built.' 'Dim'
+        Say '      Enter saves it. Enter on an empty line skips. It closes after 60 seconds without typing.' 'Dim'
+        Say ''
+        $text = Read-LineTimeout 'Message:' 60
     }
     $text = ($text -replace '[\x00-\x1F]', ' ').Trim()
     if ($text.Length -gt 200) { $text = $text.Substring(0, 200) }
@@ -943,11 +966,11 @@ function Add-SessionNote {
         $state = Read-State
         if (-not $state -or $state.history.Count -eq 0 -or $state.history[0].by -ne $script:Player) { return }
         $state.history[0].note = $text
-        try { Write-State $state; Say-Good 'Note saved.'; return }
+        try { Write-State $state; Say-Good 'Message saved.'; return }
         catch {
             if ($try -lt 2 -and (Test-Conflict $_)) { continue }
             Write-Log "note not saved: $((Get-ExceptionChain $_)[-1].Message)"
-            Say-Warn 'The note could not be saved. The world itself is uploaded.'
+            Say-Warn 'The message could not be saved. The world itself is uploaded.'
             return
         }
     }
@@ -1008,7 +1031,7 @@ function Start-PlaySession {
         Start-Sleep -Seconds 5
     } while (Test-GameRunning)
     if ($script:Fancy) { Write-Host "$($script:E)[?25h" }
-    Say-Step 'The game has closed. Uploading the world ...'
+    Say-Step ("The game has closed. You played {0}. Uploading the world ..." -f (Format-Duration ((Get-Date) - $start)))
     try { Exit-Turn }
     catch {
         Show-Error $_
@@ -1028,7 +1051,9 @@ function Get-StatusModel {
 
 function Show-StatusBox($Model) {
     Write-BoxTop 'WORLD STATUS'
+    Write-BoxRow @('', 'Text')
     Write-BoxRow @('You       ', 'Dim', $script:Player, 'Text')
+    Write-BoxRow @('', 'Text')
     $hint = ''; $hintColor = 'Text'
     if (-not $Model.Online) {
         $sync = Get-SyncException $Model.Problem
@@ -1054,11 +1079,14 @@ function Show-StatusBox($Model) {
             Write-BoxRow @('World     ', 'Dim', 'AVAILABLE', 'Good', '   nobody has it checked out', 'Dim')
             $hint = 'Ready. Press 1 to play.'; $hintColor = 'Good'
         }
+        Write-BoxRow @('', 'Text')
         Write-BoxRow @('Last save ', 'Dim', ("version {0}" -f $c.version), 'Text', ("   {0} ({1}) by {2}   {3}" -f (Format-When $c.at), (Format-Ago $c.at), $c.by, (Format-Size $c.size)), 'Dim')
         if ($c.note) {
-            $label = 'Note      '
-            foreach ($line in (Split-Wrap ('"' + $c.note + '"') ($script:W - 14))) { Write-BoxRow @($label, 'Dim', $line, 'Amber'); $label = '          ' }
+            Write-BoxRow @('', 'Text')
+            Write-BoxRow @('Message about last save', 'Dim')
+            foreach ($line in (Split-Wrap ('"' + $c.note + '"') ($script:W - 4))) { Write-BoxRow @($line, 'Amber') }
         }
+        Write-BoxRow @('', 'Text')
         switch ($Model.Local) {
             'same'      { Write-BoxRow @('This PC   ', 'Dim', 'up to date', 'Good') }
             'different' { Write-BoxRow @('This PC   ', 'Dim', 'different from the shared world', 'Amber') }
@@ -1081,7 +1109,7 @@ function Show-StatusPlain {
     else { Say '  World:        available' 'Good' }
     Say ("  Last upload:  {0} by {1} (version {2}, {3})" -f (Format-When $c.at), $c.by, $c.version, (Format-Size $c.size))
     Say ("  Online:       versions {0}" -f (($s.history | ForEach-Object { $_.version }) -join ', '))
-    if ($c.note) { Say "  Note:         $($c.note)" }
+    if ($c.note) { Say "  Message:      $($c.note)" }
     Say "  Your copy:    $($m.Local)"
 }
 
@@ -1098,7 +1126,13 @@ function Restore-Backup {
     }
     if ($state) {
         foreach ($h in $state.history) {
-            $items += @{ Where = 'online'; When = (ConvertFrom-Iso $h.at).ToLocalTime(); Size = $h.size; Note = "version $($h.version) by $($h.by)"; Entry = $h }
+            $label = "version $($h.version) by $($h.by)"
+            if ($h.note) {
+                $short = $h.note
+                if ($short.Length -gt 40) { $short = $short.Substring(0, 37) + '...' }
+                $label += '  "' + $short + '"'
+            }
+            $items += @{ Where = 'online'; When = (ConvertFrom-Iso $h.at).ToLocalTime(); Size = $h.size; Note = $label; Entry = $h }
         }
     }
     if ($items.Count -eq 0) { Say-Step 'There are no backups yet.'; return }
@@ -1107,7 +1141,7 @@ function Restore-Backup {
     Say ''
     for ($i = 0; $i -lt $items.Count; $i++) {
         $it = $items[$i]
-        Write-Seg @(("  [{0,2}] " -f ($i + 1)), 'Orange', $it.When.ToString('ddd dd MMM HH:mm'), 'Text', ("  {0,-8}" -f $it.Where), 'Amber', ("  {0,9}  " -f (Format-Size $it.Size)), 'Dim', $it.Note, 'Dim')
+        Write-Seg @(("  [{0,2}] " -f ($i + 1)), 'Orange', (Format-LocalTime $it.When).PadRight(17), 'Text', ("  {0,-8}" -f $it.Where), 'Amber', ("  {0,9}  " -f (Format-Size $it.Size)), 'Dim', $it.Note, 'Dim')
     }
     Say ''
     $pick = 0
@@ -1137,11 +1171,12 @@ function Show-Help {
             'When you quit the game, this tool uploads your progress and the world becomes available again.',
             'If you both played at the same time there would be two different worlds, out of sync, and one would have to be thrown away. Checking out stops that from happening.')),
         @('THE MENU', @(
-            '[1] PLAY: the normal way to play. Gets the newest world, starts the game, waits, and uploads when you quit. Afterwards you can leave a short note for the next player.',
+            'Move with the UP and DOWN arrow keys and press Enter, or press the key shown in brackets. Options that cannot be used right now are greyed out, with the reason beside them. The status box refreshes by itself every 30 seconds.',
+            '[1] PLAY: the normal way to play. Gets the newest world, starts the game, waits, and uploads when you quit. Afterwards you can leave a short message for the next player.',
             '[2] FINISH SESSION: uploads your progress now and makes the world available. Use it if an upload failed or you played without pressing 1.',
             '[3] RESTORE A BACKUP: brings back an older copy, from this PC or from the last 5 uploads kept online.',
             '[4] FORCE CHECK-OUT: only when your friend forgot to finish and cannot do it. You get the last uploaded world. Whatever they played since then is out of sync and will not be in the shared world.',
-            '[W] WAIT FOR THE WORLD: when your friend has it, leave this open. It beeps and shows a Windows notification the moment the world is available.',
+            '[W] WAIT FOR WORLD TO BE UPLOADED: when your friend has it, leave this open. A Windows notification tells you the moment the world is available.',
             '[S] DESKTOP SHORTCUT: puts a shortcut to this tool on your desktop. Always start the game from it, not from Steam.')),
         @('PLAYING TOGETHER AT THE SAME TIME', @(
             'When you are both online you can still play together the normal way.',
@@ -1210,18 +1245,17 @@ function Invoke-Watchdog {
 function Wait-ForAvailable {
     $interval = 60
     if ($env:SMSYNC_WAIT_SECONDS) { $interval = [int]$env:SMSYNC_WAIT_SECONDS }
-    Say-Wrapped '  ' 'Text' 'Leave this window open. It looks once a minute, then beeps and shows a Windows notification when the world is available. It does not check the world out for you.'
+    Say-Wrapped '  ' 'Text' 'Leave this window open. It looks once a minute and shows a Windows notification, with the usual notification sound, when the world has been uploaded. It does not check the world out for you.'
     $looks = 0
     while ($true) {
         $state = $null
         try { $state = Read-State } catch { Write-Log ("wait: " + (Get-ExceptionChain $_)[-1].Message) }
         $looks++
         if ($state -and -not $state.holder) {
-            try { 1..3 | ForEach-Object { [Console]::Beep(880, 180); Start-Sleep -Milliseconds 90 } } catch { }
             Show-Toast 'Scrap Mechanic Sync' 'The world is available. Open the menu and press 1 to play.'
             Say-Good 'The world is AVAILABLE. Go back to the menu and press 1 to play.'
             $c = Get-Current $state
-            if ($c.note) { Say ''; Say-Wrapped ("      Note from {0}: " -f $c.by) 'Dim' $c.note 'Amber' }
+            if ($c.note) { Say ''; Say-Wrapped ("      Message from {0}: " -f $c.by) 'Dim' $c.note 'Amber' }
             return
         }
         if ($state -and $state.holder -eq $script:Player) { Say-Step 'The world is already checked out to you.'; return }
@@ -1402,25 +1436,108 @@ function Invoke-Screen([string]$Title, [scriptblock]$Body) {
     Wait-Key
 }
 
+function Get-MenuItems($Model) {
+    # The rows of the main menu for the current status. A row with a Why cannot be chosen.
+    $other = ''
+    if ($Model.Online -and $Model.State -and $Model.State.holder -and $Model.State.holder -ne $script:Player) { $other = $Model.State.holder }
+    $why = ''
+    if (-not $Model.Online) { $why = 'not now: no connection to the online storage' }
+    elseif ($other) { $why = "not now: $other has the world checked out" }
+    $items = @(
+        @{ Key = '1'; Label = 'Play'; Desc = 'get the newest world, start the game, upload when you quit'; Why = $why }
+        @{ Key = '2'; Label = 'Finish session'; Desc = 'upload your progress and make the world available'; Why = $why }
+        @{ Key = '3'; Label = 'Restore a backup'; Desc = 'bring back an older copy of the world'; Why = $why }
+    )
+    if ($other) {
+        $items += @{ Key = 'W'; Label = 'Wait for world to be uploaded'; Desc = "notify me when $other has finished"; Why = '' }
+        $items += @{ Key = '4'; Label = 'Force check-out'; Desc = 'if they forgot to finish (their progress goes out of sync)'; Why = '' }
+    }
+    return , $items
+}
+
+function Get-ModelSignature($Model) {
+    if (-not $Model.Online) { return 'offline' }
+    if (-not $Model.State) { return 'empty|' + $Model.Local }
+    $c = Get-Current $Model.State
+    return ($Model.State.holder, $Model.State.heldSince, $c.version, $c.note, $Model.Local) -join '|'
+}
+
+function Write-MenuBlock($Items, [int]$Selected, [switch]$Again) {
+    # Draws the menu rows and the footer. With -Again it first moves the cursor back up
+    # and draws over the previous copy, so moving the highlight does not redraw the screen.
+    $footerLines = 4
+    if ($Again -and $script:Fancy) { Write-Host "$($script:E)[$($Items.Count + $footerLines)A`r" -NoNewline }
+    $pad = 2 + ($Items | ForEach-Object { $_.Label.Length } | Measure-Object -Maximum).Maximum
+    # Every row must fit on one line, or the cursor arithmetic above would be wrong.
+    $room = [Math]::Max(10, (Get-ConsoleWidth) - 8 - $pad)
+    for ($i = 0; $i -lt $Items.Count; $i++) {
+        $it = $Items[$i]
+        $tail = $it.Desc; if ($it.Why) { $tail = $it.Why }
+        if ($tail.Length -gt $room) { $tail = $tail.Substring(0, $room - 3) + '...' }
+        if ($it.Why) { Write-Seg @("  [$($it.Key)] ", 'Dim', $it.Label.PadRight($pad), 'Dim', $tail, 'Dim') }
+        elseif ($i -eq $Selected -and $script:Interactive) { Write-Seg @('  ', 'Text', ("[$($it.Key)] " + $it.Label.PadRight($pad - 2)), 'Sel', ('  ' + $tail), 'Text') }
+        else { Write-Seg @("  [$($it.Key)] ", 'Orange', $it.Label.PadRight($pad), 'Text', $tail, 'Dim') }
+    }
+    Say ''
+    Write-Seg @('  [S] ', 'Orange', 'Shortcut   ', 'Text', '[R] ', 'Orange', 'Refresh   ', 'Text', '[H] ', 'Orange', 'Help   ', 'Text', '[Q] ', 'Orange', 'Quit', 'Text')
+    Say ''
+    if ($script:Interactive) { Say '  Up and Down arrows then Enter, or press a key.' 'Dim' } else { Say '  Press a key:' 'Amber' }
+}
+
+function Read-MenuChoice($Items, [int]$Selected, [string]$Signature) {
+    # Returns the key of the chosen row or hotkey, or 'REFRESH' when the status changed.
+    $keys = (($Items | Where-Object { -not $_.Why } | ForEach-Object { $_.Key }) -join '') + 'SRHQ'
+    if (-not $script:Interactive) { return (Read-Key $keys) }
+    $nextLook = (Get-Date).AddSeconds(30)
+    while ($true) {
+        if ([Console]::KeyAvailable) {
+            $key = [Console]::ReadKey($true)
+            if ($key.Key -eq [ConsoleKey]::UpArrow -or $key.Key -eq [ConsoleKey]::DownArrow) {
+                $step = 1; if ($key.Key -eq [ConsoleKey]::UpArrow) { $step = -1 }
+                $next = $Selected
+                for ($n = 0; $n -lt $Items.Count; $n++) {
+                    $next = ($next + $step + $Items.Count) % $Items.Count
+                    if (-not $Items[$next].Why) { break }
+                }
+                if ($next -ne $Selected -and -not $Items[$next].Why) { $Selected = $next; Write-MenuBlock $Items $Selected -Again }
+            }
+            elseif ($key.Key -eq [ConsoleKey]::Enter) {
+                if ($Selected -ge 0 -and -not $Items[$Selected].Why) { return $Items[$Selected].Key }
+            }
+            else {
+                $c = ([string]$key.KeyChar).ToUpperInvariant()
+                if ($c.Length -eq 1 -and $keys.Contains($c)) { return $c }
+            }
+            continue
+        }
+        if ((Get-Date) -ge $nextLook) {
+            $script:Quiet = $true
+            try { $fresh = Get-StatusModel } finally { $script:Quiet = $false }
+            if ((Get-ModelSignature $fresh) -ne $Signature) { return 'REFRESH' }
+            $nextLook = (Get-Date).AddSeconds(30)
+        }
+        Start-Sleep -Milliseconds 80
+    }
+}
+
 function Show-Menu {
     while ($true) {
+        $script:Quiet = $true
+        try { $model = Get-StatusModel } finally { $script:Quiet = $false }
         Clear-Screen
         Show-Banner
         if ($script:Notice) { Say-Wrapped '  ' 'Text' $script:Notice 'Amber'; Say '' }
-        Show-StatusBox (Get-StatusModel)
+        Show-StatusBox $model
         Say ''
-        Write-Seg @('  [1] ', 'Orange', 'Play                ', 'Text', 'get the newest world, start the game, upload when you quit', 'Dim')
-        Write-Seg @('  [2] ', 'Orange', 'Finish session      ', 'Text', 'upload your progress and make the world available', 'Dim')
-        Write-Seg @('  [3] ', 'Orange', 'Restore a backup    ', 'Text', 'bring back an older copy of the world', 'Dim')
-        Write-Seg @('  [4] ', 'Orange', 'Force check-out     ', 'Text', 'if your friend forgot to finish (their progress goes out of sync)', 'Dim')
-        Say ''
-        Write-Seg @('  [W] ', 'Orange', 'Wait for the world  ', 'Text', 'beep and notify me when my friend has finished', 'Dim')
-        Say ''
-        Write-Seg @('  [S] ', 'Orange', 'Shortcut   ', 'Text', '[R] ', 'Orange', 'Refresh   ', 'Text', '[H] ', 'Orange', 'Help   ', 'Text', '[Q] ', 'Orange', 'Quit', 'Text')
-        Say ''
-        Write-Seg @('  Press a key: ', 'Amber', '', 'Text') -NoNewline
-        $choice = Read-Key '1234WSRHQ'
-        Say ''
+        $items = Get-MenuItems $model
+        # Start on the row most likely wanted: Wait when a friend has the world, else the first usable one.
+        $selected = -1
+        for ($i = 0; $i -lt $items.Count; $i++) { if (-not $items[$i].Why) { $selected = $i; break } }
+        for ($i = 0; $i -lt $items.Count; $i++) { if ($items[$i].Key -eq 'W') { $selected = $i } }
+        if ($script:Fancy) { Write-Host "$($script:E)[?25l" -NoNewline }
+        Write-MenuBlock $items $selected
+        try { $choice = Read-MenuChoice $items $selected (Get-ModelSignature $model) }
+        finally { if ($script:Fancy) { Write-Host "$($script:E)[?25h" -NoNewline } }
         switch ($choice) {
             '1' { Invoke-Screen 'Play' { Start-PlaySession } }
             '2' { Invoke-Screen 'Finish session' { Exit-Turn } }
@@ -1433,7 +1550,7 @@ function Show-Menu {
                     else { Say-Step 'Cancelled. Nothing was changed.' }
                 }
             }
-            'W' { Invoke-Screen 'Wait for the world' { Wait-ForAvailable } }
+            'W' { Invoke-Screen 'Wait for world to be uploaded' { Wait-ForAvailable } }
             'S' { Invoke-Screen 'Desktop shortcut' { $made = New-DesktopShortcut; Say-Good 'The shortcut is on your desktop.'; Say "      $made" 'Dim' } }
             'H' { Show-Help }
             'R' { $script:Notice = '' }
@@ -1441,7 +1558,6 @@ function Show-Menu {
         }
     }
 }
-
 # ================================================================ entry point
 
 $exitCode = 0
