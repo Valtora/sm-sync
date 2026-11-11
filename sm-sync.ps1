@@ -2,7 +2,7 @@
 sm-sync.ps1 - share one Scrap Mechanic survival save between players, one at a time.
 
 The save lives in a Cloudflare R2 bucket as numbered versions, next to a state file that
-records who holds the turn. Only the turn holder may play and upload.
+records who has the world checked out. Only that player may play and upload.
 
 Runs on Windows PowerShell 5.1 and PowerShell 7.
 KEEP THIS FILE ASCII ONLY: Windows PowerShell 5.1 misreads UTF-8 without a BOM. Box and
@@ -15,8 +15,8 @@ Without the menu:  sm-sync.ps1 -Action play|finish|status|take|update|selftest
 param(
     [ValidateSet('menu', 'play', 'finish', 'status', 'take', 'update', 'selftest')]
     [string]$Action = 'menu',
-    [switch]$NoLaunch,     # play: take the turn and download, but do not start the game
-    [switch]$Force,        # play/finish: override the other player's turn
+    [switch]$NoLaunch,     # play: check out and download, but do not start the game
+    [switch]$Force,        # play/finish: override the other player's check-out
     [switch]$Yes,          # answer yes to every confirmation
     [switch]$Plain,        # no colours, boxes or progress bars
     [switch]$NoUpdate,     # skip the update check
@@ -92,10 +92,11 @@ function Write-Seg([object[]]$Parts, [switch]$NoNewline) {
 }
 
 function Say([string]$Text = '', [string]$Color = 'Text') { Write-Seg @($Text, $Color) }
-function Say-Step([string]$Text) { Write-Seg @('  > ', 'Orange', $Text, 'Text') }
-function Say-Good([string]$Text) { Write-Seg @('  OK  ', 'Good', $Text, 'Text') }
-function Say-Warn([string]$Text) { Write-Seg @('  !!  ', 'Amber', $Text, 'Amber') }
-function Say-Bad([string]$Text)  { Write-Seg @('  XX  ', 'Bad', $Text, 'Bad') }
+# Each status line is preceded by a blank line so a screen of them stays readable.
+function Say-Step([string]$Text) { Say ''; Write-Seg @('  >   ', 'Orange', $Text, 'Text') }
+function Say-Good([string]$Text) { Say ''; Write-Seg @('  OK  ', 'Good', $Text, 'Text') }
+function Say-Warn([string]$Text) { Say ''; Write-Seg @('  !!  ', 'Amber', $Text, 'Amber') }
+function Say-Bad([string]$Text)  { Say ''; Write-Seg @('  XX  ', 'Bad', $Text, 'Bad') }
 
 function Split-Wrap([string]$Text, [int]$Width) {
     $lines = @(); $current = ''
@@ -166,7 +167,8 @@ function Show-Banner {
     }
     else { Say '  SCRAP MECHANIC' 'Orange' }
     $world = '?'; if ($script:Config) { $world = $script:Config.SaveName }
-    Write-Seg @('  S A V E   S Y N C', 'Amber', '     world ', 'Dim', $world, 'Text', '     v', 'Dim', $script:Version, 'Dim')
+    Say ''
+    Write-Seg @('  S A V E   S Y N C', 'Amber', '     world ', 'Dim', $world, 'Text', '     v', 'Dim', $script:Version, 'Dim', '     by ', 'Dim', 'Valtorra', 'Orange')
     Say ''
 }
 
@@ -208,12 +210,14 @@ function Wait-Key([string]$Text = 'Press any key to go back to the menu') {
 
 function Confirm-Yes([string]$Question) {
     if ($script:AssumeYes) { return $true }
+    Say ''
     Write-Seg @("  $Question ", 'Amber', '[Y] yes   [N] no', 'Dim')
     return ((Read-Key 'YN') -eq 'Y')
 }
 
 function Show-Progress([string]$Label, [long]$Done, [long]$Total, [datetime]$Start, [switch]$Final) {
     if (-not $script:Fancy) { return }
+    if (-not $script:ProgressOpen) { Say '' }
     $fraction = 0.0
     if ($Total -gt 0) { $fraction = [Math]::Min(1.0, $Done / $Total) }
     if ($Final) { $fraction = 1.0; $Done = $Total }
@@ -500,7 +504,7 @@ function Invoke-Remote {
             Write-Log ("attempt $attempt of $Method $Key failed: " + $chain[$chain.Count - 1].Message)
             if ($attempt -ge $max) {
                 if ($sync) { throw }
-                throw (New-SyncError 'Could not reach the online storage.' 'Check your internet connection, then try again. Nothing has been lost, and if you had the turn you still have it.')
+                throw (New-SyncError 'Could not reach the online storage.' 'Check your internet connection, then try again. Nothing has been lost, and if you had the world checked out you still do.')
             }
             Say-Warn "Connection problem. Trying again ($($attempt + 1) of $max) ..."
             Start-Sleep -Seconds (2 * $attempt)
@@ -669,7 +673,7 @@ function Backup-LocalSave([string]$Reason) {
 # ================================================================ core operations
 
 function Publish-Save([hashtable]$State) {
-    # Uploads the local save as a new version and frees the turn.
+    # Uploads the local save as a new version and checks the world back in.
     if (-not (Test-Path -LiteralPath $script:SavePath)) {
         throw (New-SyncError 'There is no save on this PC to upload.' "Expected to find it at: $script:SavePath")
     }
@@ -691,7 +695,7 @@ function Publish-Save([hashtable]$State) {
         [void](Invoke-Remote -Method 'PUT' -Key $key -InFile $script:SavePath -Label 'Uploading')
         $head = Invoke-Remote -Method 'HEAD' -Key $key
         if ($head.Status -ne 200 -or $head.Length -ne $size) {
-            throw (New-SyncError 'The upload did not arrive in one piece.' 'You still have the turn. Choose Finish session to send it again.')
+            throw (New-SyncError 'The upload did not arrive in one piece.' 'The world is still checked out to you. Choose Finish session to send it again.')
         }
         $entry = @{ version = $version; sha256 = $hash; size = $size; by = $script:Player; at = [DateTime]::UtcNow.ToString('o') }
         $history = @($entry) + $history
@@ -702,12 +706,12 @@ function Publish-Save([hashtable]$State) {
     }
 
     Write-State @{ holder = ''; heldSince = ''; version = $version; minVersion = $min; history = $history }
-    Write-Log "published version $version ($size bytes) and freed the turn"
+    Write-Log "published version $version ($size bytes) and checked the world in"
     foreach ($old in $dropped) {
         try { [void](Invoke-Remote -Method 'DELETE' -Key (Get-VersionKey $old.version)) }
         catch { Write-Log "could not delete old version $($old.version)" }
     }
-    Say-Good 'The world is uploaded and the turn is free.'
+    Say-Good 'The world is uploaded and available for the next player.'
     Say '      It is safe to close this window or shut down the PC.' 'Dim'
 }
 
@@ -747,6 +751,7 @@ function Get-OrSeedState {
     }
     if (-not (Confirm-Yes "Upload YOUR copy of '$($script:Config.SaveName)' as the starting point?")) { return $null }
     Publish-Save $null
+    $script:Seeded = $true
     return (Read-State)
 }
 
@@ -754,49 +759,51 @@ function Set-Holder([hashtable]$State) {
     $State.holder = $script:Player
     $State.heldSince = [DateTime]::UtcNow.ToString('o')
     Write-State $State
-    Write-Log 'took the turn'
+    Write-Log 'checked the world out'
 }
 
 function Enter-Turn([switch]$Override) {
-    # Takes the turn and brings the local save up to date. Returns $true when it is safe to play.
+    # Checks the world out to this player and brings the local save up to date.
+    # Returns $true when it is safe to play.
     Assert-GameClosed
     Say-Step 'Checking who has the world ...'
     $state = Get-OrSeedState
     if (-not $state) { return $false }
 
     if ($state.holder -eq $script:Player) {
-        Say-Step 'You already have the turn. Using the save on this PC.'
+        Say-Step 'You already have the world checked out. Using the save on this PC.'
         return $true
     }
     if ($state.holder) {
         if (-not $Override) {
-            Say-Bad ("{0} has the world (since {1}, {2})." -f $state.holder, (Format-When $state.heldSince), (Format-Ago $state.heldSince))
-            Say-Wrapped '      ' 'Text' 'Wait until they finish. If they forgot and cannot do it now, use "Take over the turn" in the menu.' 'Dim'
+            Say-Bad ("{0} has the world checked out (since {1}, {2})." -f $state.holder, (Format-When $state.heldSince), (Format-Ago $state.heldSince))
+            Say-Wrapped '      ' 'Text' 'They have the newest copy and have not uploaded it yet. Wait until they finish. If they forgot and cannot do it now, use "Force check-out" in the menu.' 'Dim'
             return $false
         }
-        Say-Warn ("Taking the turn away from {0}. Anything they played since {1} is left out of the shared world." -f $state.holder, (Format-When (Get-Current $state).at))
+        Say-Warn ("Forcing the check-out away from {0}. Anything they played since {1} is now out of sync." -f $state.holder, (Format-When (Get-Current $state).at))
         Write-Log "forced takeover from $($state.holder)"
     }
     if (-not (Receive-Save (Get-Current $state))) { return $false }
     Set-Holder $state
-    Say-Good 'You now have the turn.'
+    Say-Good 'The world is now checked out to you.'
     return $true
 }
 
 function Exit-Turn([switch]$Override) {
     Assert-GameClosed
+    $script:Seeded = $false
     $state = Get-OrSeedState
-    if (-not $state) { return }
+    if (-not $state -or $script:Seeded) { return }
     if ($state.holder -and $state.holder -ne $script:Player -and -not $Override) {
-        Say-Bad ("{0} has the turn, so your copy cannot be uploaded." -f $state.holder)
+        Say-Bad ("{0} has the world checked out, so your copy cannot be uploaded." -f $state.holder)
         return
     }
     if (-not $state.holder) {
         if ((Test-Path -LiteralPath $script:SavePath) -and (Get-FileSha256 $script:SavePath) -eq (Get-Current $state).sha256) {
-            Say-Step 'Nothing to do. The turn is free and this PC matches the shared world.'
+            Say-Step 'Nothing to do. The world is available and this PC already matches it.'
             return
         }
-        Say-Warn 'You did not take the turn before playing.'
+        Say-Warn 'You did not check the world out before playing.'
         if (-not (Confirm-Yes 'Upload your copy anyway and make it the shared world?')) { return }
     }
     Publish-Save $state
@@ -806,17 +813,15 @@ function Start-PlaySession {
     if (-not (Enter-Turn -Override:$Force)) { return }
     if ($NoLaunch) { return }
 
-    Say ''
     Say-Step 'Starting Scrap Mechanic ...'
     Start-Process "steam://rungameid/$script:SteamAppId"
     $deadline = (Get-Date).AddMinutes(3)
     while (-not (Test-GameRunning) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
     if (-not (Test-GameRunning)) {
         Say-Warn 'The game did not start.'
-        Say-Wrapped '      ' 'Text' 'You still have the turn. Start the game yourself from Steam, and when you are done playing choose Finish session.' 'Dim'
+        Say-Wrapped '      ' 'Text' 'The world is still checked out to you. Start the game yourself from Steam, and when you are done playing choose Finish session.' 'Dim'
         return
     }
-    Say ''
     Say-Good 'The game is running.'
     Say ''
     Say '      LEAVE THIS WINDOW OPEN.' 'Amber'
@@ -836,13 +841,11 @@ function Start-PlaySession {
         Start-Sleep -Seconds 5
     } while (Test-GameRunning)
     if ($script:Fancy) { Write-Host "$($script:E)[?25h" }
-    Say ''
     Say-Step 'The game has closed. Uploading the world ...'
     try { Exit-Turn }
     catch {
         Show-Error $_
-        Say ''
-        Say-Warn 'The world was NOT uploaded. You still have the turn. Choose Finish session to try again.'
+        Say-Warn 'The world was NOT uploaded. It is still checked out to you. Choose Finish session to try again.'
     }
 }
 
@@ -863,28 +866,28 @@ function Show-StatusBox($Model) {
     if (-not $Model.Online) {
         $sync = Get-SyncException $Model.Problem
         $what = 'Could not reach the online storage.'; if ($sync) { $what = $sync.Message }
-        Write-BoxRow @('Turn      ', 'Dim', 'UNKNOWN', 'Bad')
+        Write-BoxRow @('World     ', 'Dim', 'UNKNOWN', 'Bad')
         $hint = "$what Press R to try again."; $hintColor = 'Bad'
     }
     elseif (-not $Model.State) {
-        Write-BoxRow @('Turn      ', 'Dim', 'nothing shared yet', 'Amber')
+        Write-BoxRow @('World     ', 'Dim', 'nothing shared yet', 'Amber')
         $hint = 'Press 2 to upload the world from this PC as the starting point.'
     }
     else {
         $s = $Model.State; $c = Get-Current $s
         if ($s.holder -eq $script:Player) {
-            Write-BoxRow @('Turn      ', 'Dim', 'YOU have the world', 'Amber', ("   since {0} ({1})" -f (Format-When $s.heldSince), (Format-Ago $s.heldSince)), 'Dim')
-            $hint = 'Press 1 to keep playing, or 2 to upload and hand the world over.'
+            Write-BoxRow @('World     ', 'Dim', 'CHECKED OUT BY YOU', 'Amber', ("   since {0} ({1})" -f (Format-When $s.heldSince), (Format-Ago $s.heldSince)), 'Dim')
+            $hint = 'You have the newest copy. Press 1 to keep playing, or 2 to upload it and make it available.'
         }
         elseif ($s.holder) {
-            Write-BoxRow @('Turn      ', 'Dim', ("{0} has the world" -f $s.holder.ToUpperInvariant()), 'Bad', ("   since {0} ({1})" -f (Format-When $s.heldSince), (Format-Ago $s.heldSince)), 'Dim')
-            $hint = "Wait for $($s.holder) to finish. Do not play until the turn is free."; $hintColor = 'Bad'
+            Write-BoxRow @('World     ', 'Dim', ("CHECKED OUT BY {0}" -f $s.holder.ToUpperInvariant()), 'Bad', ("   since {0} ({1})" -f (Format-When $s.heldSince), (Format-Ago $s.heldSince)), 'Dim')
+            $hint = "$($s.holder) has the newest copy and has not uploaded it yet. Wait for them to finish. Do not play until this says AVAILABLE."; $hintColor = 'Bad'
         }
         else {
-            Write-BoxRow @('Turn      ', 'Dim', 'FREE', 'Good')
+            Write-BoxRow @('World     ', 'Dim', 'AVAILABLE', 'Good', '   nobody has it checked out', 'Dim')
             $hint = 'Ready. Press 1 to play.'; $hintColor = 'Good'
         }
-        Write-BoxRow @('Shared    ', 'Dim', ("version {0}" -f $c.version), 'Text', ("   {0} ({1}) by {2}   {3}" -f (Format-When $c.at), (Format-Ago $c.at), $c.by, (Format-Size $c.size)), 'Dim')
+        Write-BoxRow @('Last save ', 'Dim', ("version {0}" -f $c.version), 'Text', ("   {0} ({1}) by {2}   {3}" -f (Format-When $c.at), (Format-Ago $c.at), $c.by, (Format-Size $c.size)), 'Dim')
         switch ($Model.Local) {
             'same'      { Write-BoxRow @('This PC   ', 'Dim', 'up to date', 'Good') }
             'different' { Write-BoxRow @('This PC   ', 'Dim', 'different from the shared world', 'Amber') }
@@ -902,9 +905,9 @@ function Show-StatusPlain {
     Say "  You are:      $script:Player"
     if (-not $m.State) { Say '  Shared world: nothing uploaded yet' 'Amber'; return }
     $s = $m.State; $c = Get-Current $s
-    if ($s.holder -eq $script:Player) { Say ("  Turn:         YOU hold it (since {0})" -f (Format-When $s.heldSince)) 'Amber' }
-    elseif ($s.holder) { Say ("  Turn:         {0} holds it (since {1})" -f $s.holder, (Format-When $s.heldSince)) 'Bad' }
-    else { Say '  Turn:         free' 'Good' }
+    if ($s.holder -eq $script:Player) { Say ("  World:        checked out by YOU (since {0})" -f (Format-When $s.heldSince)) 'Amber' }
+    elseif ($s.holder) { Say ("  World:        checked out by {0} (since {1})" -f $s.holder, (Format-When $s.heldSince)) 'Bad' }
+    else { Say '  World:        available' 'Good' }
     Say ("  Last upload:  {0} by {1} (version {2}, {3})" -f (Format-When $c.at), $c.by, $c.version, (Format-Size $c.size))
     Say ("  Online:       versions {0}" -f (($s.history | ForEach-Object { $_.version }) -join ', '))
     Say "  Your copy:    $($m.Local)"
@@ -914,7 +917,7 @@ function Restore-Backup {
     Assert-GameClosed
     $state = Read-State
     if ($state -and $state.holder -and $state.holder -ne $script:Player) {
-        Say-Bad "$($state.holder) has the turn. You can restore when the turn is free or yours."
+        Say-Bad "$($state.holder) has the world checked out. You can restore when it is available or checked out to you."
         return
     }
     $items = @()
@@ -949,25 +952,26 @@ function Restore-Backup {
     }
     Write-Log "restored $($chosen.Where) copy from $($chosen.When)"
     if ($state -and -not $state.holder) { Set-Holder $state }
-    Say-Good 'Restored on this PC, and you have the turn.'
+    Say-Good 'Restored on this PC, and the world is checked out to you.'
     Say-Wrapped '      ' 'Text' 'Press 1 to check it in the game. It becomes the shared world when you finish the session.' 'Dim'
 }
 
 function Show-Help {
     $pages = @(
         @('HOW IT WORKS', @(
-            'There is ONE copy of the world, kept online. Think of it as a physical save disk that you and your friend pass back and forth.',
-            'Whoever has the disk has "the turn". Only that person can play. When they finish, the disk goes back online and the turn is free.',
-            'This tool does the passing for you. Play fetches the newest world and takes the turn. When you quit the game it sends the world back.',
-            'If you both played at the same time there would be two different worlds and one would have to be thrown away. The turn stops that from happening.')),
+            'There is ONE shared world, kept online. It works like a library book: one person checks it out, plays, and returns it.',
+            'AVAILABLE means nobody has it. Press 1 and the newest copy is downloaded to this PC and checked out to you.',
+            'CHECKED OUT BY a name means that person has the newest copy on their PC and has not uploaded it yet. Nobody else can play until they do.',
+            'When you quit the game, this tool uploads your progress and the world becomes available again.',
+            'If you both played at the same time there would be two different worlds, out of sync, and one would have to be thrown away. Checking out stops that from happening.')),
         @('THE MENU', @(
             '[1] PLAY: the normal way to play. Gets the newest world, starts the game, waits, and uploads when you quit. Leave the window open.',
-            '[2] FINISH SESSION: uploads now and frees the turn. Use it if the window was closed while you played, or if an upload failed.',
+            '[2] FINISH SESSION: uploads your progress now and makes the world available. Use it if the window was closed while you played, or if an upload failed.',
             '[3] RESTORE A BACKUP: brings back an older copy, from this PC or from the last 5 uploads kept online.',
-            '[4] TAKE OVER THE TURN: only when your friend forgot to finish and cannot do it. Whatever they played and did not upload is left out.')),
+            '[4] FORCE CHECK-OUT: only when your friend forgot to finish and cannot do it. You get the last uploaded world. Whatever they played since then is out of sync and will not be in the shared world.')),
         @('IF SOMETHING GOES WRONG', @(
             'Red or yellow text always says what happened and what to do next. Nothing is deleted without a backup first.',
-            'NO INTERNET: you keep the turn. Fix the connection and choose Finish session. Your friend just has to wait.',
+            'NO INTERNET: the world stays checked out to you. Fix the connection and choose Finish session. Your friend just has to wait.',
             'STEAM CLOUD CONFLICT: when Steam asks, always choose the LOCAL files.',
             'YOU PLAYED WITHOUT THIS TOOL: open it and choose Finish session. It will warn you and ask before uploading.',
             "BACKUPS are in: $script:BackupDir",
@@ -1079,9 +1083,9 @@ function Show-Menu {
         Show-StatusBox (Get-StatusModel)
         Say ''
         Write-Seg @('  [1] ', 'Orange', 'Play                ', 'Text', 'get the newest world, start the game, upload when you quit', 'Dim')
-        Write-Seg @('  [2] ', 'Orange', 'Finish session      ', 'Text', 'upload now and free the turn', 'Dim')
+        Write-Seg @('  [2] ', 'Orange', 'Finish session      ', 'Text', 'upload your progress and make the world available', 'Dim')
         Write-Seg @('  [3] ', 'Orange', 'Restore a backup    ', 'Text', 'bring back an older copy of the world', 'Dim')
-        Write-Seg @('  [4] ', 'Orange', 'Take over the turn  ', 'Text', 'only if your friend forgot to finish', 'Dim')
+        Write-Seg @('  [4] ', 'Orange', 'Force check-out     ', 'Text', 'if your friend forgot to finish (their progress goes out of sync)', 'Dim')
         Say ''
         Write-Seg @('  [R] ', 'Orange', 'Refresh   ', 'Text', '[H] ', 'Orange', 'Help   ', 'Text', '[Q] ', 'Orange', 'Quit', 'Text')
         Say ''
@@ -1093,10 +1097,10 @@ function Show-Menu {
             '2' { Invoke-Screen 'Finish session' { Exit-Turn } }
             '3' { Invoke-Screen 'Restore a backup' { Restore-Backup } }
             '4' {
-                Invoke-Screen 'Take over the turn' {
-                    Say-Wrapped '  ' 'Text' 'This is for when your friend forgot to finish their session and cannot do it now. Anything they played and did not upload will be left out of the shared world.' 'Amber'
+                Invoke-Screen 'Force check-out' {
+                    Say-Wrapped '  ' 'Text' 'This is for when your friend has the world checked out, forgot to finish, and cannot do it now. You get the last uploaded world. Anything they played since then is out of sync and will not be in the shared world.' 'Amber'
                     Say ''
-                    if ((Read-Line 'Type YES and press Enter to take over:') -ceq 'YES') { [void](Enter-Turn -Override) }
+                    if ((Read-Line 'Type YES and press Enter to force the check-out:') -ceq 'YES') { [void](Enter-Turn -Override) }
                     else { Say-Step 'Cancelled. Nothing was changed.' }
                 }
             }

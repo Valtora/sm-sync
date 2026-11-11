@@ -15,21 +15,22 @@ EVERY TIME YOU WANT TO PLAY
 
 1. Make sure Scrap Mechanic is closed.
 2. Double-click "Scrap Mechanic Sync".
-3. Look at the box at the top. It says who has the world.
-4. If it says the turn is FREE (or that YOU have it), press 1.
+3. Look at the box at the top. The "World" line says who has the world.
+4. If it says AVAILABLE (or CHECKED OUT BY YOU), press 1.
 5. The game starts by itself. LEAVE THE WINDOW OPEN while you play.
 6. Load the world as normal and play.
 7. When you are done, quit the game completely (back to the desktop).
 8. Wait for the green line that says:
-       "The world is uploaded and the turn is free."
+       "The world is uploaded and available for the next player."
    Now you can close the window or turn the PC off.
 
 
 IF SOMETHING LOOKS WRONG
 
-"<name> has the world"
-   Your friend is playing, or forgot to finish. Message them. Do not play until it
-   says the turn is free, or your progress will be lost.
+"CHECKED OUT BY <name>"
+   Your friend has the newest copy of the world and has not uploaded it yet. They are
+   playing, or forgot to finish. Message them. Do not play until it says AVAILABLE,
+   or your progress will be lost.
 
 Steam asks about a "Cloud conflict"
    Choose the LOCAL files.

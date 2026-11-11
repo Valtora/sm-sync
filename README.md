@@ -1,8 +1,8 @@
 # Scrap Mechanic Sync
 
 Shares one Scrap Mechanic Survival save between players through a Cloudflare R2 bucket.
-A state file in the bucket records who holds the turn. Only the turn holder can play and
-upload, so two people can never fork the world.
+A state file in the bucket records who has the world checked out. Only that player can
+play and upload, so two copies can never go out of sync.
 
 ## Files
 
@@ -50,15 +50,17 @@ Send a zip containing the two scripts, `FRIEND-INSTRUCTIONS.txt` and
 
 ## Daily use
 
-Press **1**. The tool downloads the newest world, takes the turn, starts the game, waits
-for you to quit, uploads, and frees the turn. The window must stay open while you play.
+Press **1**. The tool downloads the newest world, checks it out to you, starts the game,
+waits for you to quit, uploads, and makes the world available again. The window must stay open while you play.
 
-If the window was closed or the upload failed, press **2** afterwards. You keep the turn
-until an upload succeeds.
+If the window was closed or the upload failed, press **2** afterwards. The world stays
+checked out to you until an upload succeeds.
 
 ## How the save is protected
 
-- Nobody can play or upload while someone else holds the turn.
+- Nobody can play or upload while someone else has the world checked out.
+- **Force check-out** overrides that when the other player forgot to finish. Whatever
+  they played since their last upload is then out of sync and stays out of the shared world.
 - Every download is hash-checked before it replaces the local save.
 - The local save is copied to `%LOCALAPPDATA%\SMSync\backups` before every download or
   restore. The last 10 are kept.
@@ -67,7 +69,7 @@ until an upload succeeds.
 - Nothing is copied while the game is running or holds the file open.
 - An upload is refused when the save has a leftover SQLite journal (the game crashed) or
   is not a SQLite file.
-- Network failures are retried three times. A failed upload never frees the turn.
+- Network failures are retried three times. A failed upload never releases the check-out.
 
 ## Storage layout
 
