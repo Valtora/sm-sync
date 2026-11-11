@@ -45,8 +45,13 @@ bucket yet it offers to upload your copy as the starting point.
 
 ### 4. Hand over to the other player
 
-Send a zip containing the two scripts, `FRIEND-INSTRUCTIONS.txt` and
-`sm-sync.config.json`. Do not send the `.git` folder.
+`dev\make-friend-zip.ps1` builds `dist\Scrap Mechanic Sync.zip` from the newest release tag
+plus your `sm-sync.config.json`. It refuses to run until every setting, including the
+GitHub token, is filled in. The zip holds the keys, so send it privately.
+
+Before sending, `dev\simulate-friend.ps1` unpacks that zip to a temp folder and runs it as
+a second player on this PC, with a sandbox save folder and the game launch switched off.
+That copy has no `.git`, so it also exercises the real self-update.
 
 ## Daily use
 

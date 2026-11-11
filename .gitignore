@@ -2,6 +2,9 @@
 sm-sync.config.json
 .env
 
+# The zip for the other player. It contains the settings file.
+dist/
+
 # Save files and transfer leftovers
 *.db
 *.db-journal

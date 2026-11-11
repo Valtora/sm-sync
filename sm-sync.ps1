@@ -27,7 +27,7 @@ $ErrorActionPreference = 'Stop'
 
 # Bump Version for every release and tag the commit v<Version>.
 # Bump MinPeerVersion only when older copies must not touch the shared state any more.
-$script:Version        = '0.1.0'
+$script:Version        = '0.1.1'
 $script:MinPeerVersion = '0.1.0'
 
 $script:SteamAppId   = '387990'
@@ -811,7 +811,7 @@ function Exit-Turn([switch]$Override) {
 
 function Start-PlaySession {
     if (-not (Enter-Turn -Override:$Force)) { return }
-    if ($NoLaunch) { return }
+    if ($NoLaunch -or $env:SMSYNC_NO_LAUNCH) { return }
 
     Say-Step 'Starting Scrap Mechanic ...'
     Start-Process "steam://rungameid/$script:SteamAppId"
@@ -1043,7 +1043,10 @@ function Update-Self {
     & $shell -NoProfile -ExecutionPolicy Bypass -File $newScript -Action selftest -Plain | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'the downloaded update failed its self-test.' }
 
-    Copy-Item -Path (Join-Path $source '*') -Destination $PSScriptRoot -Recurse -Force
+    # Only the files a player needs. README, dev scripts and git files stay in the repo.
+    Get-ChildItem -LiteralPath $source -File |
+        Where-Object { $_.Name -eq 'sm-sync.ps1' -or $_.Extension -in '.cmd', '.txt' } |
+        Copy-Item -Destination $PSScriptRoot -Force
     Remove-Item -LiteralPath $work -Recurse -Force
     Write-Log "updated from $script:Version to $bestTag"
     return $bestTag
