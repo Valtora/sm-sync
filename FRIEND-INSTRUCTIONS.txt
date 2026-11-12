@@ -20,7 +20,8 @@ EVERY TIME YOU WANT TO PLAY
 3. Look at the box at the top. The "World" line says who has the world.
 4. If it says AVAILABLE (or CHECKED OUT BY YOU), press 1.
 5. The game starts by itself. LEAVE THE WINDOW OPEN while you play.
-6. Load the world as normal and play.
+6. The game opens straight into the shared world. If it shows the main menu instead,
+   load the world yourself as normal.
 7. When you are done, quit the game completely (back to the desktop).
 8. Wait for the green line that says:
        "The world is uploaded and available for the next player."

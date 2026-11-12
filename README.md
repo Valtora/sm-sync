@@ -73,6 +73,10 @@ stays checked out to you until an upload succeeds.
 **W** waits for the other player: it looks once a minute and shows a Windows
 notification when the world has been uploaded. It does not check the world out.
 
+The game is started through `steam.exe -applaunch 387990 -open <save file>`, which loads the
+shared world and skips the main menu. `"OpenWorldDirectly": false` in the settings file
+turns that off and launches to the main menu instead.
+
 The menu takes the up and down arrows plus Enter, or the key in brackets. Options that
 cannot be used right now are greyed out with the reason, and **W** and **4** appear only
 while the other player has the world. The status box re-checks itself every 30 seconds.
@@ -127,11 +131,13 @@ before tagging a release, because a tag installs itself on the other player's PC
 
 Auto-update follows the highest `vX.Y.Z` tag, never `main`.
 
-1. Change `$script:Version` in `sm-sync.ps1`.
+1. Change `$script:Version` in `sm-sync.ps1`, and add an entry for that version at the top of
+   `CHANGES.txt` in plain words. The other player sees it on a "what is new" screen. The
+   tests fail if the entry is missing.
 2. Commit, then tag the commit with the same number, for example `v0.2.0`.
 3. Push the commit and the tag.
 
-At its next launch the other copy downloads that tag, checks that the new script parses
+At its next launch, or within 15 minutes if its menu is already open, the other copy downloads that tag, checks that the new script parses
 and passes `-Action selftest`, and only then replaces itself and restarts. If either check
 fails it keeps running the old version and says so.
 

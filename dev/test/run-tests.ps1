@@ -53,6 +53,7 @@ New-Item -ItemType Directory -Force -Path "$release\dev" | Out-Null
 Set-Content "$release\README.md" 'repo only'
 Set-Content "$release\FRIEND-INSTRUCTIONS.txt" 'new instructions'
 Set-Content "$release\dev\tool.ps1" 'repo only'
+("9.9.9`n- Test change line.`n`n" + (Get-Content (Join-Path $repo 'CHANGES.txt') -Raw)) | Set-Content "$release\CHANGES.txt" -Encoding ASCII
 Compress-Archive -Path (Join-Path $root 'release\*') -DestinationPath "$root\release.zip"
 
 $server = Start-Process python -ArgumentList "`"$PSScriptRoot\fake_storage.py`"", $Port, "`"$root\release.zip`"" -PassThru -WindowStyle Hidden
@@ -71,6 +72,8 @@ try {
     [IO.File]::WriteAllBytes("$root\B\save\$world.db", [byte[]](1..50))
     (Get-Item "$root\B\save\$world.db").LastWriteTime = (Get-Date).AddDays(-2)
 
+    $current = [regex]::Match((Get-Content $script -Raw), "script:Version        = '([\d.]+)'").Groups[1].Value
+    Check "CHANGES.txt has an entry for $current" ((Get-Content (Join-Path $repo 'CHANGES.txt')) -contains $current)
     Check 'signing self-test on 5.1' (Has (Run A '-Action', 'selftest') 'self-test passed')
     Check 'signing self-test on 7' (Has (Run B '-Action', 'selftest') 'self-test passed')
 
@@ -139,7 +142,9 @@ try {
     $app = "$root\A\app"
     Check 'self-update installs the newer tag' ((Has $o 'v9.9.9') -and ((Get-Content "$app\sm-sync.ps1" -Raw) -match "Version        = '9\.9\.9'"))
     Check 'self-update copies player files only' ((Test-Path "$app\FRIEND-INSTRUCTIONS.txt") -and -not (Test-Path "$app\README.md") -and -not (Test-Path "$app\dev"))
-    Check 'menu launch updates and relaunches' (Has (Run B @() @('q')) 'Updated from v')
+    $o = Run B @() @('q')
+    Check 'menu launch updates, relaunches and shows what is new' ((Has $o 'WHAT IS NEW') -and (Has $o 'Test change line') -and (Has $o 'v9.9.9'))
+    Check 'what is new stops at the version already installed' (-not (Has $o 'Leave a message about your save'))
 
     Stop-Process -Id $server.Id -Force
     $o = Run B '-Action', 'status'

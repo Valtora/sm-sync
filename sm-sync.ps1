@@ -19,7 +19,7 @@ param(
     [switch]$Force,        # play/finish: override the other player's check-out
     [switch]$Yes,          # answer yes to every confirmation
     [switch]$Plain,        # no colours, boxes or progress bars
-    [switch]$NoUpdate,     # skip the update check
+    [switch]$NoUpdate,     # never check for updates, at launch or while the menu is open
     [string]$UpdatedFrom,  # set by the updater when it relaunches the new version
     [string]$Note,         # finish: the session note, instead of asking for one
     [int]$ParentPid        # watchdog: the menu window that started it
@@ -29,7 +29,7 @@ $ErrorActionPreference = 'Stop'
 
 # Bump Version for every release and tag the commit v<Version>.
 # Bump MinPeerVersion only when older copies must not touch the shared state any more.
-$script:Version        = '0.2.2'
+$script:Version        = '0.2.3'
 $script:MinPeerVersion = '0.2.0'
 
 $script:SteamAppId   = '387990'
@@ -1018,12 +1018,29 @@ function Exit-TurnCore([switch]$Override) {
     Add-SessionNote
 }
 
+function Start-Game {
+    # Starts the game through Steam with "-open <save>", which loads the shared world and
+    # skips the main menu. Set "OpenWorldDirectly": false in the settings file to go back
+    # to a plain launch if a game update ever breaks that option.
+    $direct = $true
+    if ($null -ne $script:Config.OpenWorldDirectly) { $direct = [bool]$script:Config.OpenWorldDirectly }
+    $steamExe = $null
+    try { $steamExe = (Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -ErrorAction Stop).SteamExe } catch { }
+    if ($direct -and $steamExe -and (Test-Path -LiteralPath $steamExe)) {
+        Write-Log "launching through steam.exe with -open $script:SavePath"
+        Start-Process -FilePath $steamExe -ArgumentList @('-applaunch', $script:SteamAppId, '-open', ('"{0}"' -f $script:SavePath))
+        return
+    }
+    Write-Log 'launching through the steam:// link (main menu)'
+    Start-Process "steam://rungameid/$script:SteamAppId"
+}
+
 function Start-PlaySession {
     if (-not (Enter-Turn -Override:$Force)) { return }
     if ($NoLaunch -or $env:SMSYNC_NO_LAUNCH) { return }
 
     Say-Step 'Starting Scrap Mechanic ...'
-    Start-Process "steam://rungameid/$script:SteamAppId"
+    Start-Game
     $deadline = (Get-Date).AddMinutes(3)
     while (-not (Test-GameRunning) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
     if (-not (Test-GameRunning)) {
@@ -1396,8 +1413,8 @@ function Invoke-GitHub([string]$Path, [string]$OutFile) {
     finally { $request.Dispose(); $client.Dispose() }
 }
 
-function Update-Self {
-    # Returns 'off', 'dev', 'current', or the tag name that was installed. Throws on failure.
+function Get-NewerTag {
+    # Returns 'off', 'dev', 'current', or the name of a release tag newer than this copy.
     $cfg = $script:Config
     if (-not $cfg.GitHubRepo -or -not $cfg.GitHubToken -or ([string]$cfg.GitHubToken) -match 'PASTE_') { return 'off' }
     if (Test-Path -LiteralPath (Join-Path $PSScriptRoot '.git')) { return 'dev' }
@@ -1412,6 +1429,13 @@ function Update-Self {
         }
     }
     if (-not $best -or $best -le [version]$script:Version) { return 'current' }
+    return $bestTag
+}
+
+function Update-Self {
+    # Returns 'off', 'dev', 'current', or the tag name that was installed. Throws on failure.
+    $bestTag = Get-NewerTag
+    if ($bestTag -notmatch '^v\d') { return $bestTag }
 
     Say-Step "Updating to $bestTag ..."
     $work = Join-Path $script:HomeDir 'update'
@@ -1439,6 +1463,48 @@ function Update-Self {
     Remove-Item -LiteralPath $work -Recurse -Force
     Write-Log "updated from $script:Version to $bestTag"
     return $bestTag
+}
+
+function Restart-Updated {
+    # Hands over to the freshly installed script in this same window. It skips its own
+    # launch check (it was just updated) but keeps checking while its menu is open.
+    if ($script:Fancy) { Write-Host "$($script:E)[?25h" -NoNewline }
+    & $PSCommandPath -UpdatedFrom $script:Version -Plain:$Plain
+    exit $LASTEXITCODE
+}
+
+function Get-ChangesSince([string]$From) {
+    # Reads CHANGES.txt: a version number alone on a line, then "- " lines describing it.
+    $file = Join-Path $PSScriptRoot 'CHANGES.txt'
+    $out = @()
+    if (-not (Test-Path -LiteralPath $file)) { return , $out }
+    $include = $false
+    foreach ($line in (Get-Content -LiteralPath $file -Encoding UTF8)) {
+        if ($line -match '^(\d+\.\d+\.\d+)\s*$') {
+            $v = [version]$Matches[1]
+            $include = ($v -gt [version]$From) -and ($v -le [version]$script:Version)
+            if ($include) { $out += "v$($Matches[1])" }
+            continue
+        }
+        if ($include -and $line.Trim()) { $out += $line.Trim() }
+    }
+    return , $out
+}
+
+function Show-WhatsNew([string]$From) {
+    Show-Header "Updated to version $script:Version"
+    Say-Wrapped '  ' 'Text' "This tool has updated itself from version $From. Your world, your backups and your settings are untouched."
+    $lines = Get-ChangesSince $From
+    if ($lines.Count -gt 0) {
+        Say ''
+        Say '  WHAT IS NEW' 'Amber'
+        foreach ($line in $lines) {
+            if ($line -match '^v\d') { Say ''; Say "  $line" 'Orange' }
+            else { Say-Wrapped '    -  ' 'Orange' ($line -replace '^-\s*', '') }
+        }
+    }
+    Write-Log "showed what is new since $From"
+    Wait-Key 'Press any key to continue'
 }
 
 function Invoke-UpdateCheck {
@@ -1547,12 +1613,21 @@ function Read-MenuChoice($Items, [int]$Selected, [string]$Signature) {
             if ((Get-ModelSignature $fresh) -ne $Signature) { return 'REFRESH' }
             $nextLook = (Get-Date).AddSeconds(30)
         }
+        if (-not $NoUpdate -and -not $script:UpdatesOff -and (Get-Date) -ge $script:NextUpdateLook) {
+            # A window left open still picks up a new release, within 15 minutes of it.
+            $script:NextUpdateLook = (Get-Date).AddMinutes(15)
+            $newer = ''
+            try { $newer = Get-NewerTag } catch { Write-Log ("update look failed: " + (Get-ExceptionChain $_)[-1].Message) }
+            if ($newer -match '^v\d') { return 'UPDATE' }
+            if ($newer -eq 'off' -or $newer -eq 'dev') { $script:UpdatesOff = $true }
+        }
         Start-Sleep -Milliseconds 80
     }
 }
 
 function Show-Menu {
     Request-ConsoleSize 110 42
+    $script:NextUpdateLook = (Get-Date).AddMinutes(15)
     while ($true) {
         $script:Quiet = $true
         try { $model = Get-StatusModel } finally { $script:Quiet = $false }
@@ -1594,6 +1669,11 @@ function Show-Menu {
             'S' { Invoke-Screen 'Desktop shortcut' { $made = New-DesktopShortcut; Say-Good 'The shortcut is on your desktop.'; Say "      $made" 'Dim' } }
             'H' { Show-Help }
             'R' { $script:Notice = '' }
+            'UPDATE' {
+                Show-Header 'Update'
+                Say-Step 'A new version of this tool is available.'
+                if (Invoke-UpdateCheck) { Restart-Updated }
+            }
             'Q' { return }
         }
     }
@@ -1612,14 +1692,18 @@ try {
         Say-Step "Update result: $result"
         exit 0
     }
-    if ($Action -eq 'menu' -and -not $NoUpdate) {
-        $installed = Invoke-UpdateCheck
-        if ($installed) {
-            & $PSCommandPath -UpdatedFrom $script:Version -NoUpdate -Plain:$Plain
-            exit $LASTEXITCODE
-        }
+    if ($Action -eq 'menu' -and -not $NoUpdate -and -not $UpdatedFrom) {
+        if (Invoke-UpdateCheck) { Restart-Updated }
     }
-    if ($UpdatedFrom) { $script:Notice = "Updated from v$UpdatedFrom to v$script:Version." }
+    if ($UpdatedFrom) {
+        if ($UpdatedFrom -eq $script:Version) {
+            # The release did not carry a new version number. Stop checking, or this window
+            # would install the same thing every 15 minutes.
+            $script:UpdatesOff = $true
+            $script:Notice = 'An update was installed but its version number did not change. Tell whoever set this up.'
+        }
+        else { Show-WhatsNew $UpdatedFrom }
+    }
 
     Initialize-Player
     Initialize-SavePath

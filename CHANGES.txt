@@ -1,0 +1,27 @@
+What changed in each version of Scrap Mechanic Sync. Newest first.
+The tool shows the entries you have not seen yet after it updates itself.
+Format: a version number alone on a line, then one "- " line per change.
+
+0.2.3
+- The game now opens straight into the shared world, skipping the main menu.
+- The tool checks for updates while the menu is open, not only when you start it.
+- After an update, this screen tells you what changed.
+
+0.2.2
+- The window opens taller, and the menu shrinks to fit a small window, so the top is never cut off.
+
+0.2.1
+- Move through the menu with the up and down arrow keys and press Enter.
+- Options that cannot be used right now are greyed out, with the reason beside them.
+- The status box refreshes by itself every 30 seconds.
+- After a session you see how long you played.
+- Dates read "today" and "yesterday".
+- Restore a backup shows the message left with each online version.
+
+0.2.0
+- Leave a message about your save for the next player.
+- "Wait for world to be uploaded" notifies you when your friend has finished.
+- Closing the window while you play no longer stops the upload.
+- Uploads and downloads are about three times smaller.
+- A desktop shortcut for starting the game through this tool.
+- Two players pressing Play at the same moment can no longer both get the world.
