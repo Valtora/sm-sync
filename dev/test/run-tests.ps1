@@ -21,6 +21,7 @@ $failures = 0; $checks = 0
 $env:SMSYNC_GAME_PROCESS = 'NoSuchGame_smtest'
 $env:SMSYNC_NO_TOAST = '1'
 $env:SMSYNC_WAIT_SECONDS = '1'
+$env:SMSYNC_NO_CLIPBOARD = '1'
 
 function Run([string]$Player, [string[]]$Arguments, $Stdin) {
     $shell = if ($Player -eq 'A') { 'powershell.exe' } else { 'pwsh.exe' }
@@ -135,8 +136,50 @@ try {
     $o = Run A '-Action', 'doctor'
     Check 'doctor confirms conditional writes' (Has $o 'honours conditional writes')
 
-    $o = Run A '-NoUpdate' @('h', 'r', '3', '', 'w', 'q')
+    Check 'doctor can list the stored objects' (Has $o 'objects for this world')
+
+    # A leftover object from a failed upload is removed by the next successful one.
+    Invoke-WebRequest "http://127.0.0.1:$Port/b/My_World/v000001.db.gz" -Method Put -Body 'junk' -UseBasicParsing `
+        -Headers @{ Authorization = 'AWS4-HMAC-SHA256 test'; 'x-amz-date' = 'test' } | Out-Null
+    Check 'leftover object is in storage' ((Keys) -match 'v000001')
+    [void](Run A '-Action', 'play', '-NoLaunch'); Touch A 'after the leftover'; [void](Run A '-Action', 'finish')
+    Check 'leftover objects are cleaned up' ((Keys) -notmatch 'v000001')
+
+    # A new, much smaller world under the same name must not replace the shared one unasked.
+    [void](Run A '-Action', 'play', '-NoLaunch')
+    $good = [IO.File]::ReadAllBytes("$root\A\save\$world.db")
+    $small = New-Object byte[] (1MB); [Array]::Copy($good, $small, 16)
+    [IO.File]::WriteAllBytes("$root\A\save\$world.db", $small)
+    Check 'a much smaller world is not uploaded unasked' (Has (Run A @('-Action', 'finish') @('n')) 'much smaller than the shared world')
+    [IO.File]::WriteAllBytes("$root\A\save\$world.db", $good)
+    [void](Run A '-Action', 'finish')
+
+    # A save from a newer game build warns the player whose game is older.
+    $env:SMSYNC_GAME_BUILD = '200'
+    [void](Run A '-Action', 'play', '-NoLaunch'); Touch A 'made on a newer game'; [void](Run A '-Action', 'finish')
+    $env:SMSYNC_GAME_BUILD = '100'
+    Check 'older game is warned about a newer save' (Has (Run B @('-Action', 'play', '-NoLaunch') @('n')) 'NEWER version of Scrap Mechanic')
+    Remove-Item Env:SMSYNC_GAME_BUILD
+
+    # Two players press Play at the same moment. A reads the state, pauses, and B gets in
+    # first. A's write must then be refused, not overwrite B's check-out.
+    $env:SMSYNC_HOME = "$root\A\home"; $env:SMSYNC_PLAYER = 'A'; $env:SMSYNC_TEST_CHECKOUT_DELAY = '6'
+    # pwsh here: Windows PowerShell started this way inherits PowerShell 7's module path and cannot load its own modules.
+    $slow = Start-Process pwsh.exe -PassThru -WindowStyle Hidden -RedirectStandardOutput "$root\slow.txt" -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$root\A\app\sm-sync.ps1`"", '-Action', 'play', '-NoLaunch')
+    Remove-Item Env:SMSYNC_TEST_CHECKOUT_DELAY
+    Start-Sleep -Seconds 2
+    $o = Run B '-Action', 'play', '-NoLaunch', '-Yes'
+    $slow.WaitForExit()
+    Check 'simultaneous check-out: the first writer wins' (Has $o 'now checked out to you')
+    Check 'simultaneous check-out: the second is refused' (Has (Get-Content "$root\slow.txt" -Raw) 'a moment before you')
+    Check 'simultaneous check-out: the state names the winner' (Has (Run A '-Action', 'status') 'checked out by B')
+    [void](Run B '-Action', 'finish')
+
+    $o = Run A '-NoUpdate' @('h', 'r', '3', '', 'a', 'd', 'w', 'q')
     Check 'menu, help and restore list render on 5.1' ((Has $o 'PLAYING TOGETHER') -and (Has $o 'Pick the copy to bring back') -and (Has $o 'by Valtorra'))
+    Check 'activity screen lists sessions' ((Has $o 'The last sessions') -and (Has $o 'Fuel is in the red chest'))
+    Check 'diagnostics screen runs the checks' (Has $o 'honours conditional writes')
 
     $o = Run A '-Action', 'update'
     $app = "$root\A\app"
@@ -152,7 +195,7 @@ try {
 }
 finally {
     if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force }
-    Remove-Item Env:SMSYNC_HOME, Env:SMSYNC_PLAYER, Env:SMSYNC_GAME_PROCESS, Env:SMSYNC_NO_TOAST, Env:SMSYNC_WAIT_SECONDS -ErrorAction SilentlyContinue
+    Remove-Item Env:SMSYNC_HOME, Env:SMSYNC_PLAYER, Env:SMSYNC_GAME_PROCESS, Env:SMSYNC_NO_TOAST, Env:SMSYNC_WAIT_SECONDS, Env:SMSYNC_NO_CLIPBOARD, Env:SMSYNC_GAME_BUILD, Env:SMSYNC_TEST_CHECKOUT_DELAY -ErrorAction SilentlyContinue
 }
 Write-Host ''
 if ($failures) { Write-Host "$failures of $checks checks FAILED. Re-run with -ShowAll to see the output." -ForegroundColor Red; exit 1 }

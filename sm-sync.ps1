@@ -29,7 +29,7 @@ $ErrorActionPreference = 'Stop'
 
 # Bump Version for every release and tag the commit v<Version>.
 # Bump MinPeerVersion only when older copies must not touch the shared state any more.
-$script:Version        = '0.2.3'
+$script:Version        = '0.2.4'
 $script:MinPeerVersion = '0.2.0'
 
 $script:SteamAppId   = '387990'
@@ -102,10 +102,12 @@ function Write-Seg([object[]]$Parts, [switch]$NoNewline) {
 
 function Say([string]$Text = '', [string]$Color = 'Text') { Write-Seg @($Text, $Color) }
 # Each status line is preceded by a blank line so a screen of them stays readable.
-function Say-Step([string]$Text) { Say ''; Write-Seg @('  >   ', 'Orange', $Text, 'Text') }
-function Say-Good([string]$Text) { Say ''; Write-Seg @('  OK  ', 'Good', $Text, 'Text') }
-function Say-Warn([string]$Text) { Say ''; Write-Seg @('  !!  ', 'Amber', $Text, 'Amber') }
-function Say-Bad([string]$Text)  { Say ''; Write-Seg @('  XX  ', 'Bad', $Text, 'Bad') }
+# While $script:Transcript is a list, they are also recorded for the diagnostics report.
+function Add-Transcript([string]$Line) { if ($null -ne $script:Transcript) { $script:Transcript.Add($Line) } }
+function Say-Step([string]$Text) { Add-Transcript "..  $Text"; Say ''; Write-Seg @('  >   ', 'Orange', $Text, 'Text') }
+function Say-Good([string]$Text) { Add-Transcript "OK  $Text"; Say ''; Write-Seg @('  OK  ', 'Good', $Text, 'Text') }
+function Say-Warn([string]$Text) { Add-Transcript "!!  $Text"; Say ''; Write-Seg @('  !!  ', 'Amber', $Text, 'Amber') }
+function Say-Bad([string]$Text)  { Add-Transcript "XX  $Text"; Say ''; Write-Seg @('  XX  ', 'Bad', $Text, 'Bad') }
 
 function Split-Wrap([string]$Text, [int]$Width) {
     $lines = @(); $current = ''
@@ -425,7 +427,8 @@ function Format-Size([long]$Bytes) { return ('{0:N1} MB' -f ($Bytes / 1MB)) }
 function Get-SigV4Authorization {
     param(
         [string]$Method, [string]$CanonicalUri, [hashtable]$Headers, [string]$PayloadHash,
-        [string]$AccessKey, [string]$SecretKey, [string]$Region, [string]$AmzDate
+        [string]$AccessKey, [string]$SecretKey, [string]$Region, [string]$AmzDate,
+        [string]$CanonicalQuery = ''
     )
     $lower = @{}
     foreach ($k in $Headers.Keys) { $lower[$k.ToLowerInvariant()] = ([string]$Headers[$k]).Trim() }
@@ -435,7 +438,7 @@ function Get-SigV4Authorization {
     $canonicalHeaders = ''
     foreach ($n in $names) { $canonicalHeaders += $n + ':' + $lower[$n] + "`n" }
     $signedHeaders = $names -join ';'
-    $canonicalRequest = @($Method, $CanonicalUri, '', $canonicalHeaders, $signedHeaders, $PayloadHash) -join "`n"
+    $canonicalRequest = @($Method, $CanonicalUri, $CanonicalQuery, $canonicalHeaders, $signedHeaders, $PayloadHash) -join "`n"
 
     $dateStamp = $AmzDate.Substring(0, 8)
     $scope = "$dateStamp/$Region/s3/aws4_request"
@@ -452,38 +455,56 @@ function Get-SigV4Authorization {
 }
 
 function Invoke-SelfTest {
-    # Published example from the AWS S3 Signature V4 documentation (GET object with a Range header).
-    $auth = Get-SigV4Authorization -Method 'GET' -CanonicalUri '/test.txt' -PayloadHash $script:EmptyHash `
-        -AccessKey 'AKIAIOSFODNN7EXAMPLE' -SecretKey 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' `
-        -Region 'us-east-1' -AmzDate '20130524T000000Z' -Headers @{
+    # Published examples from the AWS S3 Signature V4 documentation.
+    $cases = @(
+        @{ Name = 'object with a Range header'; Uri = '/test.txt'; Query = ''; Range = 'bytes=0-9'
+           Expected = 'f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41' }
+        @{ Name = 'bucket listing with a query string'; Uri = '/'; Query = 'max-keys=2&prefix=J'; Range = ''
+           Expected = '34b48302e7b5fa45bde8084f4b7868a86f0a534bc59db6670ed5711ef69dc6f7' }
+    )
+    $allPassed = $true
+    foreach ($case in $cases) {
+        $headers = @{
             'host'                 = 'examplebucket.s3.amazonaws.com'
-            'range'                = 'bytes=0-9'
             'x-amz-content-sha256' = $script:EmptyHash
             'x-amz-date'           = '20130524T000000Z'
         }
-    $expected = 'f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41'
-    if ($auth.EndsWith("Signature=$expected")) { Say-Good "Signing self-test passed (v$script:Version)."; return $true }
-    Say-Bad "Signing self-test FAILED. Got: $auth"
-    return $false
+        if ($case.Range) { $headers['range'] = $case.Range }
+        $auth = Get-SigV4Authorization -Method 'GET' -CanonicalUri $case.Uri -CanonicalQuery $case.Query -PayloadHash $script:EmptyHash `
+            -AccessKey 'AKIAIOSFODNN7EXAMPLE' -SecretKey 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' `
+            -Region 'us-east-1' -AmzDate '20130524T000000Z' -Headers $headers
+        if (-not $auth.EndsWith("Signature=$($case.Expected)")) { $allPassed = $false; Say-Bad "Signing self-test FAILED for $($case.Name). Got: $auth" }
+    }
+    if ($allPassed) { Say-Good "Signing self-test passed (v$script:Version)." }
+    return $allPassed
 }
-
 # ================================================================ remote storage
 
 function Invoke-RemoteOnce {
     param([string]$Method, [string]$Key, [byte[]]$Body, [string]$InFile, [string]$OutFile, [string]$Label,
-          [string]$IfMatch, [switch]$IfNoneMatch)
+          [string]$IfMatch, [switch]$IfNoneMatch, [hashtable]$Query)
 
     $cfg = $script:Config
     $base = [Uri]($cfg.Endpoint.TrimEnd('/'))
     $encodedKey = (($Key -split '/') | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
     $path = '/' + $cfg.Bucket + '/' + $encodedKey
+    if (-not $Key) { $path = '/' + $cfg.Bucket }
+    # Query parameters are part of what is signed: sorted by name, both sides URI-encoded.
+    $canonicalQuery = ''
+    if ($Query) {
+        $queryNames = [string[]]@($Query.Keys)
+        [Array]::Sort($queryNames, [StringComparer]::Ordinal)
+        $canonicalQuery = ($queryNames | ForEach-Object { [Uri]::EscapeDataString($_) + '=' + [Uri]::EscapeDataString([string]$Query[$_]) }) -join '&'
+    }
+    $urlQuery = ''
+    if ($canonicalQuery) { $urlQuery = '?' + $canonicalQuery }
 
     if ($InFile)             { $payloadHash = Get-FileSha256 $InFile }
     elseif ($null -ne $Body) { $payloadHash = Get-Sha256Hex $Body }
     else                     { $payloadHash = $script:EmptyHash }
 
     $amzDate = [DateTime]::UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'", [Globalization.CultureInfo]::InvariantCulture)
-    $auth = Get-SigV4Authorization -Method $Method -CanonicalUri $path -PayloadHash $payloadHash `
+    $auth = Get-SigV4Authorization -Method $Method -CanonicalUri $path -CanonicalQuery $canonicalQuery -PayloadHash $payloadHash `
         -AccessKey $cfg.AccessKeyId -SecretKey $cfg.SecretAccessKey -Region 'auto' -AmzDate $amzDate -Headers @{
             'host'                 = $base.Authority
             'x-amz-content-sha256' = $payloadHash
@@ -491,7 +512,7 @@ function Invoke-RemoteOnce {
         }
 
     $httpMethod = New-Object System.Net.Http.HttpMethod $Method
-    $request = New-Object System.Net.Http.HttpRequestMessage -ArgumentList $httpMethod, ($base.GetLeftPart([UriPartial]::Authority) + $path)
+    $request = New-Object System.Net.Http.HttpRequestMessage -ArgumentList $httpMethod, ($base.GetLeftPart([UriPartial]::Authority) + $path + $urlQuery)
     $inStream = $null; $response = $null
     try {
         $total = 0L
@@ -587,7 +608,7 @@ function Invoke-RemoteOnce {
 
 function Invoke-Remote {
     param([string]$Method, [string]$Key, [byte[]]$Body, [string]$InFile, [string]$OutFile, [string]$Label,
-          [string]$IfMatch, [switch]$IfNoneMatch)
+          [string]$IfMatch, [switch]$IfNoneMatch, [hashtable]$Query)
     $max = 3
     # Quiet is set while the menu re-checks the status in the background: one try, no messages.
     if ($script:Quiet) { $max = 1 }
@@ -632,10 +653,15 @@ function Read-State {
     foreach ($h in @($o.history)) {
         if ($h) {
             $history += @{ version = [int]$h.version; sha256 = [string]$h.sha256; size = [long]$h.size; by = [string]$h.by; at = (ConvertTo-IsoString $h.at)
-                gz = [bool]$h.gz; stored = [long]$h.stored; note = [string]$h.note }
+                gz = [bool]$h.gz; stored = [long]$h.stored; note = [string]$h.note; build = [string]$h.build }
         }
     }
+    $sessions = @()
+    foreach ($x in @($o.sessions)) {
+        if ($x) { $sessions += @{ by = [string]$x.by; at = (ConvertTo-IsoString $x.at); minutes = [int]$x.minutes; version = [int]$x.version; note = [string]$x.note } }
+    }
     return @{
+        sessions   = $sessions
         holder     = [string]$o.holder
         heldSince  = ConvertTo-IsoString $o.heldSince
         version    = [int]$o.version
@@ -655,8 +681,11 @@ function Write-State([hashtable]$State) {
         writtenBy = "sm-sync $script:Version"
         history = @($State.history | ForEach-Object {
             [ordered]@{ version = $_.version; sha256 = $_.sha256; size = $_.size; by = $_.by; at = $_.at
-                gz = [bool]$_.gz; stored = [long]$_.stored; note = [string]$_.note } })
+                gz = [bool]$_.gz; stored = [long]$_.stored; note = [string]$_.note; build = [string]$_.build } })
     }
+    # The activity log. Copies older than 0.2.4 do not know it and drop it when they write.
+    $doc.sessions = @($State.sessions | Where-Object { $_ } | ForEach-Object {
+        [ordered]@{ by = $_.by; at = $_.at; minutes = [int]$_.minutes; version = [int]$_.version; note = [string]$_.note } })
     $json = ConvertTo-Json -InputObject $doc -Depth 5
     $body = [Text.Encoding]::UTF8.GetBytes($json)
     # Only write if the state is still the one we read. Two players acting in the same
@@ -833,8 +862,17 @@ function Publish-Save([hashtable]$State) {
         Say-Step 'The world has not changed since the last upload, so there is nothing to send.'
     }
     else {
+        if ($history.Count -gt 0 -and $history[0].size -gt 1MB -and $size -lt ($history[0].size / 2)) {
+            # A new world created under the same name, or a reset save, would otherwise
+            # replace the shared world without anyone noticing.
+            Say-Warn ("The save on this PC is much smaller than the shared world: {0} against {1}." -f (Format-Size $size), (Format-Size $history[0].size))
+            Say-Wrapped '      ' 'Text' 'This usually means a NEW world was created with the same name, or the save was reset. Uploading it would replace the shared world for both of you.' 'Dim'
+            if (-not (Confirm-Yes 'Upload this smaller world anyway?')) {
+                throw (New-SyncError 'Nothing was uploaded, because the save on this PC looks like the wrong world.' 'The world is still checked out to you. Use Restore a backup to bring the right world back, then Finish session.')
+            }
+        }
         $version++
-        $entry = @{ version = $version; sha256 = $hash; size = $size; by = $script:Player; at = [DateTime]::UtcNow.ToString('o'); gz = $true; stored = 0L; note = '' }
+        $entry = @{ build = (Get-GameBuild); version = $version; sha256 = $hash; size = $size; by = $script:Player; at = [DateTime]::UtcNow.ToString('o'); gz = $true; stored = 0L; note = '' }
         $packed = Join-Path $script:HomeDir 'upload.db.gz'
         Say-Step 'Packing the world ...'
         Compress-File $script:SavePath $packed
@@ -855,12 +893,20 @@ function Publish-Save([hashtable]$State) {
         }
     }
 
-    Write-State @{ holder = ''; heldSince = ''; version = $version; minVersion = $min; history = $history; etag = $etag; isNew = $isNew }
+    $sessions = @()
+    if ($State -and $State.sessions) { $sessions = @($State.sessions) }
+    if ($entry) {
+        $sessions = @(@{ by = $script:Player; at = $entry.at; minutes = [int]$script:SessionMinutes; version = $version; note = '' }) + $sessions
+        if ($sessions.Count -gt 20) { $sessions = @($sessions | Select-Object -First 20) }
+        $script:SessionMinutes = 0
+    }
+    Write-State @{ holder = ''; heldSince = ''; version = $version; minVersion = $min; history = $history; sessions = $sessions; etag = $etag; isNew = $isNew }
     Write-Log "published version $version ($size bytes) and checked the world in"
     foreach ($old in $dropped) {
         try { [void](Invoke-Remote -Method 'DELETE' -Key (Get-VersionKey $old)) }
         catch { Write-Log "could not delete old version $($old.version)" }
     }
+    Remove-Orphans $history $version
     Say-Good 'The world is uploaded and available for the next player.'
     if ($entry) { Say ("      Version {0}: {1} sent, {2} unpacked." -f $entry.version, (Format-Size $entry.stored), (Format-Size $entry.size)) 'Dim' }
     Say '      It is safe to close this window or shut down the PC.' 'Dim'
@@ -920,6 +966,7 @@ function Get-OrSeedState {
 function Set-Holder([hashtable]$State) {
     $State.holder = $script:Player
     $State.heldSince = [DateTime]::UtcNow.ToString('o')
+    if ($env:SMSYNC_TEST_CHECKOUT_DELAY) { Start-Sleep -Seconds ([int]$env:SMSYNC_TEST_CHECKOUT_DELAY) }   # tests only: lets a second player get in first
     Write-State $State
     Write-Log 'checked the world out'
 }
@@ -946,6 +993,12 @@ function Enter-Turn([switch]$Override) {
         Write-Log "forced takeover from $($state.holder)"
     }
     $current = Get-Current $state
+    $myBuild = Get-GameBuild
+    if ($current.build -and $myBuild -and ([long]$myBuild -lt [long]$current.build)) {
+        Say-Warn 'This save was made with a NEWER version of Scrap Mechanic than the one on this PC.'
+        Say-Wrapped '      ' 'Text' 'An older game may not be able to open it. Let Steam update Scrap Mechanic first (Steam, Library, Scrap Mechanic, Update), then press 1 again.' 'Dim'
+        if (-not (Confirm-Yes 'Check out and download anyway?')) { return $false }
+    }
     if (-not (Receive-Save $current)) { return $false }
     try { Set-Holder $state }
     catch {
@@ -987,6 +1040,7 @@ function Add-SessionNote {
         $state = Read-State
         if (-not $state -or $state.history.Count -eq 0 -or $state.history[0].by -ne $script:Player) { return }
         $state.history[0].note = $text
+        if ($state.sessions.Count -gt 0 -and $state.sessions[0].version -eq $state.history[0].version) { $state.sessions[0].note = $text }
         try { Write-State $state; Say-Good 'Message saved.'; return }
         catch {
             if ($try -lt 2 -and (Test-Conflict $_)) { continue }
@@ -1070,6 +1124,7 @@ function Start-PlaySession {
     } while (Test-GameRunning)
     if ($script:Fancy) { Write-Host "$($script:E)[?25h" }
     Say-Step ("The game has closed. You played {0}. Uploading the world ..." -f (Format-Duration ((Get-Date) - $start)))
+    $script:SessionMinutes = [int][Math]::Round(((Get-Date) - $start).TotalMinutes)
     try { Exit-Turn }
     catch {
         Show-Error $_
@@ -1078,7 +1133,7 @@ function Start-PlaySession {
 }
 
 function Get-StatusModel {
-    $m = @{ Online = $true; State = $null; Local = 'none' }
+    $m = @{ Online = $true; State = $null; Local = 'none'; GameRunning = (Test-GameRunning) }
     try { $m.State = Read-State }
     catch { $m.Online = $false; $m.Problem = $_; return $m }
     if (Test-Path -LiteralPath $script:SavePath) {
@@ -1131,6 +1186,11 @@ function Get-StatusRows($Model) {
             'different' { $rows += , @('This PC   ', 'Dim', 'different from the shared world', 'Amber') }
             default     { $rows += , @('This PC   ', 'Dim', 'no copy yet', 'Dim') }
         }
+    }
+    $mine = $Model.Online -and $Model.State -and ($Model.State.holder -eq $script:Player)
+    if ($Model.GameRunning -and -not $mine) {
+        $hint = 'Scrap Mechanic is running, but the world is NOT checked out to you. Joining your friend as a guest is fine. If you are playing the shared world yourself, quit the game and press 1, or your progress will be out of sync.'
+        $hintColor = 'Amber'
     }
     $rows += , @('', 'Text')
     foreach ($line in (Split-Wrap $hint ($script:W - 4))) { $rows += , @($line, $hintColor) }
@@ -1225,7 +1285,9 @@ function Show-Help {
             '[3] RESTORE A BACKUP: brings back an older copy, from this PC or from the last 5 uploads kept online.',
             '[4] FORCE CHECK-OUT: only when your friend forgot to finish and cannot do it. You get the last uploaded world. Whatever they played since then is out of sync and will not be in the shared world.',
             '[W] WAIT FOR WORLD TO BE UPLOADED: when your friend has it, leave this open. A Windows notification tells you the moment the world is available.',
-            '[S] DESKTOP SHORTCUT: puts a shortcut to this tool on your desktop. Always start the game from it, not from Steam.')),
+            '[S] DESKTOP SHORTCUT: puts a shortcut to this tool on your desktop. Always start the game from it, not from Steam.',
+            '[A] ACTIVITY: who played when, for how long, and the message they left.',
+            '[D] DIAGNOSTICS: checks that everything is set up correctly and copies a report you can paste to whoever set this up.')),
         @('PLAYING TOGETHER AT THE SAME TIME', @(
             'When you are both online you can still play together the normal way.',
             'ONE of you presses 1 here and hosts the world. The other does NOT use this tool at all: they open Scrap Mechanic from Steam and join the host through the friends list.',
@@ -1386,8 +1448,95 @@ function Invoke-Doctor {
         catch { Say-Bad ("The update check fails: " + (Get-ExceptionChain $_)[-1].Message) }
     }
     else { Say-Warn 'No update key in the settings file, so this copy will not update itself.' }
+    $stored = Get-RemoteKeys
+    Say-Good ("The storage holds {0} objects for this world." -f $stored.Count)
     $exe = Find-GameExe
-    if ($exe) { Say-Good "Game found: $exe" } else { Say-Warn 'Game not found through Steam. The desktop shortcut will use a plain icon.' }
+    if ($exe) { Say-Good "Game found: $exe (build $(Get-GameBuild))" } else { Say-Warn 'Game not found through Steam. The desktop shortcut will use a plain icon.' }
+}
+
+# ================================================================ game version, storage listing, activity, diagnostics
+
+function Get-GameBuild {
+    # Steam's build number for the installed game. It only ever goes up, so it orders versions.
+    if ($env:SMSYNC_GAME_BUILD) { return $env:SMSYNC_GAME_BUILD }
+    try {
+        $exe = Find-GameExe
+        if (-not $exe) { return '' }
+        # <library>\steamapps\common\Scrap Mechanic\Release\ScrapMechanic.exe
+        $steamapps = Split-Path (Split-Path (Split-Path (Split-Path $exe)))
+        $manifest = Join-Path $steamapps "appmanifest_$($script:SteamAppId).acf"
+        if (Test-Path -LiteralPath $manifest) {
+            $m = [regex]::Match((Get-Content -LiteralPath $manifest -Raw), '"buildid"\s+"(\d+)"')
+            if ($m.Success) { return $m.Groups[1].Value }
+        }
+    }
+    catch { }
+    return ''
+}
+
+function Get-RemoteKeys {
+    # Every object stored for this world.
+    $keys = @(); $token = ''
+    do {
+        $query = @{ 'list-type' = '2'; 'prefix' = "$script:Prefix/" }
+        if ($token) { $query['continuation-token'] = $token }
+        $r = Invoke-Remote -Method 'GET' -Key '' -Query $query
+        $xml = [xml]$r.Text
+        foreach ($item in @($xml.ListBucketResult.Contents)) { if ($item) { $keys += [string]$item.Key } }
+        $token = [string]$xml.ListBucketResult.NextContinuationToken
+    } while ($token)
+    return , $keys
+}
+
+function Remove-Orphans($History, [int]$Version) {
+    # Deletes version files that the history no longer points at: leftovers from an upload
+    # that failed half way, or from a delete that did not go through. Never fatal.
+    try {
+        $keep = @($History | ForEach-Object { Get-VersionKey $_ })
+        foreach ($key in (Get-RemoteKeys)) {
+            $m = [regex]::Match($key, '/v(\d{6})\.db(\.gz)?$')
+            $stale = $m.Success -and ($keep -notcontains $key) -and ([int]$m.Groups[1].Value -le $Version)
+            if ($stale -or $key.EndsWith('/_doctor.txt')) {
+                [void](Invoke-Remote -Method 'DELETE' -Key $key)
+                Write-Log "removed leftover object $key"
+            }
+        }
+    }
+    catch { Write-Log ("storage clean-up skipped: " + (Get-ExceptionChain $_)[-1].Message) }
+}
+
+function Show-Activity {
+    $state = Read-State
+    if (-not $state -or $state.sessions.Count -eq 0) { Say-Step 'No sessions have been recorded yet. They appear here after the next upload.'; return }
+    Say '  The last sessions, newest first.' 'Dim'
+    foreach ($s in $state.sessions) {
+        $length = ''
+        if ($s.minutes -gt 0) { $length = Format-Duration ([TimeSpan]::FromMinutes($s.minutes)) }
+        Say ''
+        Write-Seg @(('  ' + (Format-When $s.at).PadRight(20)), 'Text', $s.by.PadRight(16), 'Amber', $length.PadRight(10), 'Text', ("version {0}" -f $s.version), 'Dim')
+        if ($s.note) { Say-Wrapped '      ' 'Text' ('"' + $s.note + '"') 'Dim' }
+    }
+}
+
+function Show-Diagnostics {
+    $script:Transcript = New-Object 'System.Collections.Generic.List[string]'
+    try { Invoke-Doctor }
+    catch { Show-Error $_; Add-Transcript ('XX  ' + (Get-ExceptionChain $_)[-1].Message) }
+    $lines = @($script:Transcript)
+    $script:Transcript = $null
+    $console = 'classic console'; if ($env:WT_SESSION) { $console = 'Windows Terminal' }
+    $report = @(
+        "Scrap Mechanic Sync v$script:Version diagnostics, $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
+        "Player: $script:Player"
+        "Windows $([Environment]::OSVersion.Version), PowerShell $($PSVersionTable.PSVersion), $console"
+        ''
+    ) + $lines + @('', 'Last log lines:') + @(Get-Content -LiteralPath $script:LogPath -Tail 12 -ErrorAction SilentlyContinue)
+    if ($env:SMSYNC_NO_CLIPBOARD) { return }
+    try {
+        Set-Clipboard -Value ($report -join "`r`n")
+        Say-Good 'This report is copied. Paste it into a message to whoever set this up (Ctrl+V).'
+    }
+    catch { Say-Warn 'The report could not be copied. Take a photo of this window instead.' }
 }
 
 # ================================================================ self-update
@@ -1553,12 +1702,13 @@ function Get-MenuItems($Model) {
 }
 
 function Get-ModelSignature($Model) {
-    if (-not $Model.Online) { return 'offline' }
-    if (-not $Model.State) { return 'empty|' + $Model.Local }
+    # Anything that changes what the menu shows. A different value triggers a redraw.
+    $game = [string]$Model.GameRunning
+    if (-not $Model.Online) { return "offline|$game" }
+    if (-not $Model.State) { return "empty|$($Model.Local)|$game" }
     $c = Get-Current $Model.State
-    return ($Model.State.holder, $Model.State.heldSince, $c.version, $c.note, $Model.Local) -join '|'
+    return ($Model.State.holder, $Model.State.heldSince, $c.version, $c.note, $Model.Local, $game) -join '|'
 }
-
 function Write-MenuBlock($Items, [int]$Selected, [switch]$Again) {
     # Draws the menu rows and the footer. With -Again it first moves the cursor back up
     # and draws over the previous copy, so moving the highlight does not redraw the screen.
@@ -1576,14 +1726,14 @@ function Write-MenuBlock($Items, [int]$Selected, [switch]$Again) {
         else { Write-Seg @("  [$($it.Key)] ", 'Orange', $it.Label.PadRight($pad), 'Text', $tail, 'Dim') }
     }
     Say ''
-    Write-Seg @('  [S] ', 'Orange', 'Shortcut   ', 'Text', '[R] ', 'Orange', 'Refresh   ', 'Text', '[H] ', 'Orange', 'Help   ', 'Text', '[Q] ', 'Orange', 'Quit', 'Text')
+    Write-Seg @('  [A] ', 'Orange', 'Activity   ', 'Text', '[D] ', 'Orange', 'Diagnostics   ', 'Text', '[S] ', 'Orange', 'Shortcut   ', 'Text', '[R] ', 'Orange', 'Refresh   ', 'Text', '[H] ', 'Orange', 'Help   ', 'Text', '[Q] ', 'Orange', 'Quit', 'Text')
     Say ''
     if ($script:Interactive) { Say '  Up and Down arrows then Enter, or press a key.' 'Dim' } else { Say '  Press a key:' 'Amber' }
 }
 
 function Read-MenuChoice($Items, [int]$Selected, [string]$Signature) {
     # Returns the key of the chosen row or hotkey, or 'REFRESH' when the status changed.
-    $keys = (($Items | Where-Object { -not $_.Why } | ForEach-Object { $_.Key }) -join '') + 'SRHQ'
+    $keys = (($Items | Where-Object { -not $_.Why } | ForEach-Object { $_.Key }) -join '') + 'ADSRHQ'
     if (-not $script:Interactive) { return (Read-Key $keys) }
     $nextLook = (Get-Date).AddSeconds(30)
     while ($true) {
@@ -1631,6 +1781,12 @@ function Show-Menu {
     while ($true) {
         $script:Quiet = $true
         try { $model = Get-StatusModel } finally { $script:Quiet = $false }
+        $outside = $model.GameRunning -and -not ($model.Online -and $model.State -and ($model.State.holder -eq $script:Player))
+        if ($outside -and -not $script:WarnedOutside) {
+            Write-Log 'the game is running without a check-out'
+            Show-Toast 'Scrap Mechanic Sync' 'The game is running but the world is not checked out to you. Fine as a guest, otherwise quit and press 1.'
+        }
+        $script:WarnedOutside = $outside
         $items = Get-MenuItems $model
         # Fit the window: drop the spacer rows in the status box first, then the big banner.
         $rows = Get-StatusRows $model
@@ -1667,6 +1823,8 @@ function Show-Menu {
             }
             'W' { Invoke-Screen 'Wait for world to be uploaded' { Wait-ForAvailable } }
             'S' { Invoke-Screen 'Desktop shortcut' { $made = New-DesktopShortcut; Say-Good 'The shortcut is on your desktop.'; Say "      $made" 'Dim' } }
+            'A' { Invoke-Screen 'Activity' { Show-Activity } }
+            'D' { Invoke-Screen 'Diagnostics' { Show-Diagnostics } }
             'H' { Show-Help }
             'R' { $script:Notice = '' }
             'UPDATE' {

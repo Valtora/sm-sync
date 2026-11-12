@@ -29,7 +29,10 @@ $stage = Join-Path $work 'Scrap Mechanic Sync'
 [void](New-Item -ItemType Directory -Path $stage)
 try {
     $archive = Join-Path $work 'release.zip'
-    git -C $repo archive --format=zip -o $archive $Tag -- 'sm-sync.ps1' 'Scrap Mechanic Sync.cmd' 'FRIEND-INSTRUCTIONS.txt' 'CHANGES.txt'
+    # Only the files that exist in that release: older tags have no CHANGES.txt.
+    $inTag = git -C $repo ls-tree --name-only $Tag
+    $files = @('sm-sync.ps1', 'Scrap Mechanic Sync.cmd', 'FRIEND-INSTRUCTIONS.txt', 'CHANGES.txt') | Where-Object { $inTag -contains $_ }
+    git -C $repo archive --format=zip -o $archive $Tag -- $files
     if ($LASTEXITCODE -ne 0) { throw "git archive failed for $Tag." }
     Expand-Archive -LiteralPath $archive -DestinationPath $stage
     Copy-Item -LiteralPath $configPath -Destination $stage

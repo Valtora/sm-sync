@@ -99,6 +99,12 @@ from Steam and join through the friends list. Only the host checks out and uploa
 - Nothing is copied while the game is running or holds the file open.
 - An upload is refused when the save has a leftover SQLite journal (the game crashed) or
   is not a SQLite file.
+- An upload less than half the size of the shared world stops and asks first, in case a new
+  world was created under the same name.
+- Each upload records Steam's build number for the game. A player whose game is older than
+  the save is warned before checking out.
+- The menu warns when the game is running without the world checked out to that player.
+- After each upload, version files the history no longer points at are deleted from the bucket.
 - Network failures are retried three times. A failed upload never releases the check-out.
 - The state file is written with a conditional PUT (`If-Match` on its ETag). If two players
   act in the same second, the second write is refused and that player is told to look again.
@@ -108,11 +114,11 @@ from Steam and join through the friends list. Only the host checks out and uploa
 ## Storage layout
 
 ```
-<SaveName>/state.json       holder, heldSince, version, minVersion, history[5]
+<SaveName>/state.json       holder, heldSince, version, minVersion, history[5], sessions[20]
 <SaveName>/v000007.db.gz    one gzip object per version, oldest pruned beyond 5
 ```
 
-Each history entry holds `version, sha256, size, by, at, gz, stored, note`. The hash is of the
+Each history entry holds `version, sha256, size, by, at, gz, stored, note, build`. The hash is of the
 uncompressed save. Versions uploaded before 0.2.0 are plain `.db` objects and still restore.
 A 32 MB save compresses to about 9 MB.
 
@@ -147,6 +153,8 @@ the state format, and every older copy refuses to sync until it has updated.
 ## Troubleshooting
 
 - Log: `%LOCALAPPDATA%\SMSync\sm-sync.log`.
+- **D** in the menu runs the same checks as `doctor` below and copies a report to the
+  clipboard, for the other player to paste to you. **A** shows the last 20 sessions.
 - `sm-sync.ps1 -Action doctor` checks the keys, that the storage honours conditional writes,
   the update token, and that the game can be found.
 - `sm-sync.ps1 -Action selftest` checks request signing against Amazon's published example.

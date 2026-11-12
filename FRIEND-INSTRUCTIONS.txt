@@ -55,8 +55,9 @@ The upload failed
    Open the tool again and press 2.
 
 Red text
-   It always says what happened and what to do. If you are not sure, take a photo of
-   the window, send it to your friend, and do not play until it is sorted.
+   It always says what happened and what to do. If you are not sure, go back to the
+   menu, press D, wait for it to finish, then paste (Ctrl+V) into a message to your
+   friend. Do not play until it is sorted.
 
 Press H in the menu for a longer explanation of how it all works.
 

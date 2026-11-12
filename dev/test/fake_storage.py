@@ -9,6 +9,8 @@ usage: fake_storage.py <port> [zip served as the v9.9.9 release]
 import hashlib
 import json
 import sys
+from urllib.parse import parse_qs, urlsplit
+from xml.sax.saxutils import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 STORE = {}
@@ -70,6 +72,17 @@ class Handler(BaseHTTPRequestHandler):
                 with open(ZIP, "rb") as f:
                     return self._reply(200, f.read())
             return self._reply(404, b"{}")
+        parts = urlsplit(self.path)
+        query = parse_qs(parts.query)
+        if query.get("list-type") == ["2"]:
+            # ListObjectsV2: /<bucket>?list-type=2&prefix=...
+            if not self._signed():
+                return
+            start = parts.path.rstrip("/") + "/"
+            prefix = query.get("prefix", [""])[0]
+            keys = sorted(k[len(start):] for k in STORE if k.startswith(start) and k[len(start):].startswith(prefix))
+            body = "<ListBucketResult>" + "".join("<Contents><Key>%s</Key></Contents>" % escape(k) for k in keys) + "</ListBucketResult>"
+            return self._reply(200, body.encode())
         if self._signed():
             if self.path in STORE:
                 self._reply(200, STORE[self.path], tag=etag(STORE[self.path]))
