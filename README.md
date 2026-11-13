@@ -1,166 +1,124 @@
 # Scrap Mechanic Sync
 
-Shares one Scrap Mechanic Survival save between players through a Cloudflare R2 bucket.
-A state file in the bucket records who has the world checked out. Only that player can
-play and upload, so two copies can never go out of sync.
+Share one Scrap Mechanic Survival world between friends without a dedicated server and
+without sending save files to each other.
 
-## Files
+The world is kept in online storage. It works like a library book: one player checks it
+out, the game opens straight into it, and when they quit the tool uploads their progress
+for the next player. If a friend is already playing, press **J** to join their game.
 
-| File | Purpose |
+<!-- Screenshot of the main menu goes here: ![The main menu](docs/menu.png) -->
+
+- **One file to double-click.** A text menu in a terminal window. Nothing to install: it
+  runs on the PowerShell that ships with Windows.
+- **Two copies never go out of sync.** Only the player who has the world checked out can
+  play and upload. Two players pressing Play in the same second are caught.
+- **Backups at every step.** The last 5 uploads stay online and the last 10 local copies
+  stay on each PC. Any of them can be restored from the menu.
+- **Notes between players.** Leave a message after your session, such as "fuel is in the
+  red chest".
+- **Updates itself** from this repository, and shows what changed.
+
+## What you need
+
+- Windows 10 or 11, and Scrap Mechanic on Steam.
+- **One person in the group** needs a Cloudflare account for the storage (R2). Cloudflare
+  asks for a payment card when R2 is switched on. A shared world uses a few megabytes of
+  the 10 GB free allowance, so normal use costs nothing.
+- Everyone else needs only an invite code from that person.
+
+## Getting started
+
+**Download:** [Scrap-Mechanic-Sync.zip](https://github.com/Valtora/sm-sync/releases/latest/download/Scrap-Mechanic-Sync.zip).
+Right-click the zip, choose **Extract All**, open the folder and double-click
+**Scrap Mechanic Sync**.
+
+The first run is a setup with two routes:
+
+| You are | Choose | What happens |
+| --- | --- | --- |
+| Starting a shared world for your group | **2** Set up a new shared world | Pick the world, create the storage with on-screen steps, upload, and get an invite to send. About 10 minutes. |
+| Joining a friend's world | **1** I have an invite code | Copy the message your friend sent. The tool reads the code from your clipboard. |
+
+[docs/SETUP.md](docs/SETUP.md) has the full walkthrough, including every Cloudflare step
+and what to do when the connection test fails.
+[FRIEND-INSTRUCTIONS.txt](FRIEND-INSTRUCTIONS.txt) is a plain-text guide to everyday use
+that you can send to a friend.
+
+## Everyday use
+
+1. Start the tool, not the game. A desktop shortcut is offered on the first run.
+2. The status box says who has the world. If it says **AVAILABLE**, press **1**.
+3. The game opens in the shared world. Leave the tool's window open.
+4. Quit the game when you are done. The tool uploads and asks for an optional note.
+
+| Key | Does |
 | --- | --- |
-| `Scrap Mechanic Sync.cmd` | Double-click this. Opens the menu in Windows Terminal when it is installed, otherwise in a normal console. |
-| `sm-sync.ps1` | The tool. Runs on Windows PowerShell 5.1 and PowerShell 7. |
-| `sm-sync.config.example.json` | Template for the settings file. |
-| `sm-sync.config.json` | The real settings: R2 keys and the GitHub update token. Untracked, never commit it. |
-| `FRIEND-INSTRUCTIONS.txt` | Plain instructions for the other player. |
-| `dev\make-friend-zip.ps1` | Builds the zip you send to the other player. |
-| `dev\simulate-friend.ps1` | Runs that zip as a second player on this PC. |
-| `dev\test\run-tests.ps1` | End-to-end tests against a local stand-in for R2 and GitHub. |
+| **1** | Play: download the newest world, check it out, start the game, upload on quit |
+| **2** | Finish session: upload now, for example after a failed upload |
+| **3** | Restore a backup, local or online |
+| **J** | Join the friend who has the world, as a guest in their game |
+| **W** | Wait: a Windows notification tells you when the world is available |
+| **4** | Force check-out, for when a friend forgot to finish |
+| **A** | Activity: who played when, and their notes |
+| **F** | Invite a friend |
+| **D** | Diagnostics: check the setup and copy a report |
+| **I** | Report an issue here on GitHub, with the report filled in |
+| **H** | Help |
 
-## Setup
+## Is it safe?
 
-### 1. R2 bucket and keys
+It is one PowerShell script, [sm-sync.ps1](sm-sync.ps1), and you can read all of it. What
+it does on your PC:
 
-1. In the Cloudflare dashboard open **R2 Object Storage** and create a bucket.
-2. **Manage API Tokens**, **Create API Token**: permission **Object Read & Write**,
-   scoped to that bucket only.
-3. Put the Access Key ID, the Secret Access Key and the S3 endpoint
-   (`https://<account id>.r2.cloudflarestorage.com`, without the bucket name) into
-   `sm-sync.config.json`. `SaveName` is the world's file name without `.db`.
+- Reads and writes the one save file you chose, and keeps backups in
+  `%LOCALAPPDATA%\SMSync`.
+- Talks to your storage bucket, and to GitHub to look for updates.
+- Starts the game through Steam.
+- Replaces its own files when a new release is tagged here. Set `"AutoUpdate": false` in
+  `sm-sync.config.json` to turn that off.
 
-### 2. GitHub update token
+Things to know before you rely on it:
 
-The other player's copy updates itself from this private repo, so it needs a read-only
-token.
+- **An invite code is a key.** Anyone who has it can download, replace or delete the
+  shared world. Send it privately. If one leaks, delete the API token in Cloudflare,
+  create a new one and send new invites.
+- **Windows may warn you** about a script downloaded from the internet. The setup guide
+  explains the two prompts you might see.
+- **Steam Cloud** also syncs the save folder. If Steam reports a conflict, keep the local
+  files.
+- **Your storage, your data.** Nothing is sent to the author. The storage belongs to the
+  person who set it up.
 
-1. GitHub, **Settings**, **Developer settings**, **Fine-grained tokens**, **Generate new token**.
-2. Repository access: **Only select repositories**, pick `sm-sync`.
-3. Permissions: **Contents: Read-only**. Nothing else.
-4. Expiry: your choice. With an expiry date, updates stop on that day until you issue a
-   new token. Without one, a leaked zip stays usable until you delete the token.
-5. Paste it into `GitHubToken` in `sm-sync.config.json`.
+### Privacy when reporting problems
 
-A copy that sits inside a git checkout never updates itself. That is the developer copy.
+Diagnostics (**D**) and Report issue (**I**) build a report from the tool's checks and the
+last lines of its log. Before it leaves your PC, the tool removes player names, storage
+keys and addresses, Steam IDs, your Windows user name, and the names of your world and
+bucket. Report issue shows you the report and sends nothing itself: it opens the issue
+form in your browser and you press the button.
 
-### 3. First upload
+## Help and feedback
 
-Quit Scrap Mechanic, run `Scrap Mechanic Sync.cmd`, press **2**. With nothing in the
-bucket yet it offers to upload your copy as the starting point.
+- Press **I** in the menu, or open an [issue](https://github.com/Valtora/sm-sync/issues/new/choose).
+- Never post an invite code or your `sm-sync.config.json` in an issue.
+- Support for other games is not planned.
 
-### 4. Hand over to the other player
+## For developers
 
-`dev\make-friend-zip.ps1` builds `dist\Scrap Mechanic Sync.zip` from the newest release tag
-plus your `sm-sync.config.json`. It refuses to run until every setting, including the
-GitHub token, is filled in. The zip holds the keys, so send it privately.
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) covers the storage layout, the test suite and
+how releases work.
 
-Before sending, `dev\simulate-friend.ps1` unpacks that zip to a temp folder and runs it as
-a second player on this PC, with a sandbox save folder and the game launch switched off.
-That copy has no `.git`, so it also exercises the real self-update.
+## Credits
 
-## Daily use
+Written by [Valtora](https://github.com/Valtora).
+<!-- Add once he has agreed to be named:
+The idea came from a Reddit thread in which u/Gloryboy811 described a similar tool of their own.
+-->
 
-Press **1**. The tool downloads the newest world, checks it out to you, starts the game,
-waits for you to quit, uploads, and makes the world available again. The window must stay open while you play.
+Released under the [MIT licence](LICENSE). This project is not affiliated with or endorsed
+by Axolot Games. Scrap Mechanic is a trademark of its owner.
 
-After the upload it asks for an optional note for the next player ("fuel is in the red
-chest"). The prompt closes by itself after 60 seconds, and the world is already available
-by then.
+---
 
-If the window is closed while the game runs, a hidden helper process uploads the world when
-the game exits and shows a Windows notification. If an upload fails, press **2**. The world
-stays checked out to you until an upload succeeds.
-
-**W** waits for the other player: it looks once a minute and shows a Windows
-notification when the world has been uploaded. It does not check the world out.
-
-The game is started through `steam.exe -applaunch 387990 -open <save file>`, which loads the
-shared world and skips the main menu. `"OpenWorldDirectly": false` in the settings file
-turns that off and launches to the main menu instead.
-
-The menu takes the up and down arrows plus Enter, or the key in brackets. Options that
-cannot be used right now are greyed out with the reason, and **W** and **4** appear only
-while the other player has the world. The status box re-checks itself every 30 seconds.
-
-### Playing at the same time
-
-One player presses **1** and hosts. The other sees `CHECKED OUT BY <host>` with a hint that
-the host is probably playing (the check-out is under 12 hours old), and presses **J**. That
-starts the game with no check-out and with `-connect_steam_id <id> -friend_steam_id <id>`, so
-it joins the host directly. The host's Steam ID is read from their save folder name at
-check-out and kept in the state file. Only the host checks out and uploads.
-
-## How the save is protected
-
-- Nobody can play or upload while someone else has the world checked out.
-- **Force check-out** overrides that when the other player forgot to finish. Whatever
-  they played since their last upload is then out of sync and stays out of the shared world.
-- Every download is hash-checked before it replaces the local save.
-- The local save is copied to `%LOCALAPPDATA%\SMSync\backups` before every download or
-  restore. The last 10 are kept.
-- The last 5 uploaded versions stay in the bucket. **Restore a backup** lists local and
-  online copies together.
-- Nothing is copied while the game is running or holds the file open.
-- An upload is refused when the save has a leftover SQLite journal (the game crashed) or
-  is not a SQLite file.
-- An upload less than half the size of the shared world stops and asks first, in case a new
-  world was created under the same name.
-- Each upload records Steam's build number for the game. A player whose game is older than
-  the save is warned before checking out.
-- The menu warns when the game is running without the world checked out to that player.
-- After each upload, version files the history no longer points at are deleted from the bucket.
-- Network failures are retried three times. A failed upload never releases the check-out.
-- The state file is written with a conditional PUT (`If-Match` on its ETag). If two players
-  act in the same second, the second write is refused and that player is told to look again.
-- Uploads from the menu window and from the background helper are serialised by a named
-  mutex, so one session is never uploaded twice at once.
-
-## Storage layout
-
-```
-<SaveName>/state.json       holder, heldSince, version, minVersion, history[5], sessions[20]
-<SaveName>/v000007.db.gz    one gzip object per version, oldest pruned beyond 5
-```
-
-Each history entry holds `version, sha256, size, by, at, gz, stored, note, build`. The hash is of the
-uncompressed save. Versions uploaded before 0.2.0 are plain `.db` objects and still restore.
-A 32 MB save compresses to about 9 MB.
-
-## Tests
-
-```
-dev\test\run-tests.ps1
-```
-
-Two players, one on Windows PowerShell 5.1 and one on PowerShell 7, run through check-out,
-refusal, upload, download, notes, history pruning, restore, the background helper, forced
-check-out, the failure cases and a self-update. Needs python for the fake server. Run it
-before tagging a release, because a tag installs itself on the other player's PC.
-
-## Releasing an update
-
-Auto-update follows the highest `vX.Y.Z` tag, never `main`.
-
-1. Change `$script:Version` in `sm-sync.ps1`, and add an entry for that version at the top of
-   `CHANGES.txt` in plain words. The other player sees it on a "what is new" screen. The
-   tests fail if the entry is missing.
-2. Commit, then tag the commit with the same number, for example `v0.2.0`.
-3. Push the commit and the tag.
-
-At its next launch, or within 15 minutes if its menu is already open, the other copy downloads that tag, checks that the new script parses
-and passes `-Action selftest`, and only then replaces itself and restarts. If either check
-fails it keeps running the old version and says so.
-
-`$script:MinPeerVersion` is written into `state.json`. Raise it in a release that changes
-the state format, and every older copy refuses to sync until it has updated.
-
-## Troubleshooting
-
-- Log: `%LOCALAPPDATA%\SMSync\sm-sync.log`.
-- **D** in the menu runs the same checks as `doctor` below and copies a report to the
-  clipboard, for the other player to paste to you. **A** shows the last 20 sessions.
-- `sm-sync.ps1 -Action doctor` checks the keys, that the storage honours conditional writes,
-  the update token, and that the game can be found.
-- `sm-sync.ps1 -Action selftest` checks request signing against Amazon's published example.
-- `-Action status|play|finish|take|update` run without the menu. `-Plain` turns colours off.
-- Steam Cloud also syncs the save folder per account. On a Cloud conflict, keep the
-  local files.
+If this saved you some hassle, you can [buy me a coffee](https://ko-fi.com/valtora).

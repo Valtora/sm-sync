@@ -1,0 +1,21 @@
+name: Suggest an improvement
+description: An idea that would make Scrap Mechanic Sync more useful.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the situation, not the solution. For example "three of us share a world and..."
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+    validations:
+      required: false
+  - type: markdown
+    attributes:
+      value: |
+        Support for games other than Scrap Mechanic is not planned.

@@ -2,15 +2,24 @@ SCRAP MECHANIC SYNC - HOW TO USE
 
 SETUP (once)
 
-1. Right-click the zip file, choose "Extract All", and extract it somewhere you will
-   find it again, for example your Documents folder. Keep all the files together.
-2. Open the extracted folder and double-click "Scrap Mechanic Sync".
+Your friend sent you a message with a download link and a long invite code that starts
+with SMSYNC1. Keep that message private: the code is the key to your shared world.
+
+1. Download the zip from the link in the message. Right-click it, choose "Extract All",
+   and extract it somewhere you will find it again, for example your Documents folder.
+   Keep all the files together.
+2. Go back to your friend's message and copy the whole of it.
+3. Open the extracted folder and double-click "Scrap Mechanic Sync".
    If Windows shows a blue "Windows protected your PC" box, click "More info" and then
    "Run anyway". If it shows "Open File - Security Warning", click "Run".
-3. A black and orange window opens and asks for your name. Type it and press Enter.
-   Use a different name from your friend.
-4. It asks whether to put a shortcut on your desktop. Press Y.
+4. A black and orange window opens. Press 1 for "I have an invite code". It reads the
+   code from what you copied. If it asks for the code, paste with Ctrl+V and press Enter.
+5. It asks for your name. Type it and press Enter. Use a different name from your friend.
+6. It asks whether to put a shortcut on your desktop. Press Y.
    From now on, ALWAYS start the game with that shortcut, never from Steam.
+
+If you are the one starting a shared world for your group, press 2 on that first screen
+instead and follow the steps it shows. Afterwards press F to invite your friends.
 
 
 EVERY TIME YOU WANT TO PLAY
@@ -68,7 +77,12 @@ The upload failed
 Red text
    It always says what happened and what to do. If you are not sure, go back to the
    menu, press D, wait for it to finish, then paste (Ctrl+V) into a message to your
-   friend. Do not play until it is sorted.
+   friend. Do not play until it is sorted. Names, keys and Steam IDs are taken out of
+   that report for you.
+
+You think the tool itself is at fault
+   Press I in the menu. It opens a page on GitHub with the report filled in, where you
+   can describe what happened. Nothing is sent until you press the button on that page.
 
 Press H in the menu for a longer explanation of how it all works.
 

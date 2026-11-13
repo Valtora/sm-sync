@@ -64,7 +64,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/_keys":
             return self._reply(200, "\n".join(sorted(STORE)).encode())
         if self.path.startswith("/repos/"):
-            if self.headers.get("Authorization") != "Bearer good-token":
+            # A public repository: no key needed, but a stale key is refused the way GitHub does.
+            if self.headers.get("Authorization") not in (None, "Bearer good-token"):
                 return self._reply(401, b"{}")
             if "/tags" in self.path:
                 return self._reply(200, json.dumps([{"name": "v0.0.1"}, {"name": "v9.9.9"}, {"name": "junk"}]).encode())

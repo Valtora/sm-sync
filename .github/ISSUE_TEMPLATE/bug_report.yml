@@ -1,0 +1,49 @@
+name: Report a problem
+description: Something in Scrap Mechanic Sync went wrong or behaved in a way you did not expect.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. The easiest way to fill this form in is to press **I** in the tool's menu: it opens this page with the last two boxes already completed.
+
+        This issue is public. Never paste an invite code, the contents of `sm-sync.config.json`, or a screenshot that shows either.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you press, and what did the tool do or say? Copy any red or yellow text word for word.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+    validations:
+      required: false
+  - type: dropdown
+    id: role
+    attributes:
+      label: How was this copy set up?
+      options:
+        - I set up the storage myself (host)
+        - With an invite code from a friend
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Shown beside "SAVE SYNC" at the top of the menu.
+      placeholder: "0.3.0"
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics report
+      description: Filled in for you when you press I in the menu. If it looks cut short, click in the box, select everything and paste (Ctrl+V), because the tool also copied the full report. Names, keys, Steam IDs and your Windows user name are already removed.
+      render: text
+    validations:
+      required: false

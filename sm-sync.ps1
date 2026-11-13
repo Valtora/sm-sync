@@ -8,12 +8,13 @@ Runs on Windows PowerShell 5.1 and PowerShell 7.
 KEEP THIS FILE ASCII ONLY: Windows PowerShell 5.1 misreads UTF-8 without a BOM. Box and
 block characters are built at runtime from their code points.
 
-Normal use is the menu (double-click "Scrap Mechanic Sync.cmd").
-Without the menu:  sm-sync.ps1 -Action play|finish|status|take|update|selftest
+Normal use is the menu (double-click "Scrap Mechanic Sync.cmd"). The first run is a setup
+that either takes an invite code from a friend or walks through creating the storage.
+Without the menu:  sm-sync.ps1 -Action play|finish|status|take|update|selftest|setup
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('menu', 'play', 'finish', 'status', 'take', 'update', 'selftest', 'wait', 'watchdog', 'doctor')]
+    [ValidateSet('menu', 'play', 'finish', 'status', 'take', 'update', 'selftest', 'wait', 'watchdog', 'doctor', 'setup')]
     [string]$Action = 'menu',
     [switch]$NoLaunch,     # play: check out and download, but do not start the game
     [switch]$Force,        # play/finish: override the other player's check-out
@@ -29,8 +30,12 @@ $ErrorActionPreference = 'Stop'
 
 # Bump Version for every release and tag the commit v<Version>.
 # Bump MinPeerVersion only when older copies must not touch the shared state any more.
-$script:Version        = '0.2.6'
+$script:Version        = '0.3.0'
 $script:MinPeerVersion = '0.2.0'
+
+# Where updates come from and where issues go. "GitHubRepo" in the settings file overrides it.
+$script:DefaultRepo  = 'Valtora/sm-sync'
+$script:InvitePrefix = 'SMSYNC1'
 
 $script:SteamAppId   = '387990'
 $script:GameProcess  = 'ScrapMechanic'
@@ -198,9 +203,10 @@ function Show-Banner([switch]$Small) {
         }
     }
     else { Say '  SCRAP MECHANIC' 'Orange' }
-    $world = '?'; if ($script:Config) { $world = $script:Config.SaveName }
+    $label = ''; $world = ''
+    if ($script:Config -and $script:Config.SaveName) { $label = '     world '; $world = [string]$script:Config.SaveName }
     Say ''
-    Write-Seg @('  S A V E   S Y N C', 'Amber', '     world ', 'Dim', $world, 'Text', '     v', 'Dim', $script:Version, 'Dim', '     by ', 'Dim', 'Valtora', 'Orange')
+    Write-Seg @('  S A V E   S Y N C', 'Amber', $label, 'Dim', $world, 'Text', '     v', 'Dim', $script:Version, 'Dim', '     by ', 'Dim', 'Valtora', 'Orange')
     Say ''
 }
 
@@ -231,6 +237,44 @@ function Read-Line([string]$Prompt) {
     $line = [Console]::ReadLine()
     if ($null -eq $line) { return '' }
     return $line.Trim()
+}
+
+function Get-ClipboardText {
+    if ($env:SMSYNC_NO_CLIPBOARD) { return '' }
+    try { return [string](Get-Clipboard -Raw) } catch { return '' }
+}
+
+function Read-Text([string]$Prompt, [switch]$Mask) {
+    # Like Read-Line, but with no length limit (Console.ReadLine stops at 254 characters on
+    # Windows PowerShell, shorter than an invite code) and with -Mask to show stars.
+    if (-not $script:Interactive) { return (Read-Line $Prompt) }
+    Write-Seg @("  $Prompt ", 'Amber', '', 'Text') -NoNewline
+    $typed = New-Object System.Text.StringBuilder
+    while ($true) {
+        $key = [Console]::ReadKey($true)
+        if ($key.Key -eq [ConsoleKey]::Enter) { break }
+        if ($key.Key -eq [ConsoleKey]::Escape) { [void]$typed.Clear(); break }
+        if ($key.Key -eq [ConsoleKey]::Backspace) {
+            if ($typed.Length -gt 0) { [void]$typed.Remove($typed.Length - 1, 1); Write-Host "`b `b" -NoNewline }
+            continue
+        }
+        $chunk = ''
+        # The classic console hands Ctrl+V to the program instead of pasting.
+        if ($key.Key -eq [ConsoleKey]::V -and ($key.Modifiers -band [ConsoleModifiers]::Control)) { $chunk = (Get-ClipboardText) -replace '[\r\n]+', '' }
+        elseif (-not [char]::IsControl($key.KeyChar)) { $chunk = [string]$key.KeyChar }
+        if ($chunk) {
+            [void]$typed.Append($chunk)
+            if ($Mask) { Write-Host ('*' * $chunk.Length) -NoNewline } else { Write-Host $chunk -NoNewline }
+        }
+    }
+    Write-Host ''
+    return $typed.ToString().Trim()
+}
+
+function Open-Link([string]$Url) {
+    # Opens a web page in the default browser. Tests set SMSYNC_NO_LAUNCH.
+    if ($env:SMSYNC_NO_LAUNCH) { Say-Step ("Would open " + $Url.Substring(0, [Math]::Min(90, $Url.Length))); return }
+    try { Start-Process $Url } catch { Say-Warn "The browser could not be opened. The address is: $Url" }
 }
 
 function Wait-Key([string]$Text = 'Press any key to go back to the menu') {
@@ -589,10 +633,10 @@ function Invoke-RemoteOnce {
                 throw (New-SyncError 'The clock on this PC is wrong, so the storage refused the connection.' 'Open Windows Settings, Time and language, Date and time, and press "Sync now". Then try again.')
             }
             if ($text -match 'NoSuchBucket') {
-                throw (New-SyncError 'The storage bucket named in sm-sync.config.json does not exist.' 'Check the "Bucket" value in sm-sync.config.json.')
+                throw (New-SyncError "The storage has no bucket named '$($cfg.Bucket)'." 'Check the bucket name on the Cloudflare R2 page. To enter it again, delete sm-sync.config.json from the tool''s folder and open the tool, which starts the setup.')
             }
             if ($status -eq 401 -or $status -eq 403) {
-                throw (New-SyncError 'The storage rejected the access keys.' 'Check AccessKeyId and SecretAccessKey in sm-sync.config.json, and that the clock on this PC is correct.')
+                throw (New-SyncError 'The storage rejected the access keys.' 'The API token must have the permission "Object Read & Write" for this bucket, and the clock on this PC must be correct. To enter the keys again, delete sm-sync.config.json from the tool''s folder and open the tool, which starts the setup.')
             }
             throw (New-SyncError "The storage refused the request (code $status)." "Try again. If it keeps happening, send this file to whoever set this up: $script:LogPath")
         }
@@ -703,24 +747,48 @@ function Write-State([hashtable]$State) {
 
 # ================================================================ local setup
 
-function Initialize-Config {
-    $path = Join-Path $PSScriptRoot 'sm-sync.config.json'
+function Get-ConfigPath { return (Join-Path $PSScriptRoot 'sm-sync.config.json') }
+
+function Use-Config($Cfg) {
+    $script:Config = $Cfg
+    $script:Prefix = ([string]$Cfg.SaveName -replace '[^A-Za-z0-9_-]', '_')
+    $script:StateKey = "$script:Prefix/state.json"
+    if (-not $script:Http) {
+        $script:Http = New-Object System.Net.Http.HttpClient
+        $script:Http.Timeout = [TimeSpan]::FromMinutes(30)
+    }
+}
+
+function Save-Config($Cfg) {
+    Set-Content -LiteralPath (Get-ConfigPath) -Value ($Cfg | ConvertTo-Json) -Encoding UTF8
+}
+
+function Initialize-Config([switch]$AllowMissing) {
+    # Returns $true when the settings are complete. With -AllowMissing, a missing or
+    # unfinished file returns $false and the setup takes over.
+    $script:Config = [pscustomobject]@{}
+    $path = Get-ConfigPath
+    $redo = 'Double-click "Scrap Mechanic Sync.cmd" to run the setup.'
     if (-not (Test-Path -LiteralPath $path)) {
-        throw (New-SyncError 'The settings file sm-sync.config.json is missing.' "It must sit in the same folder as this tool ($PSScriptRoot). If you set this up yourself, copy sm-sync.config.example.json to that name and fill it in. Otherwise ask whoever set it up to send the file again.")
+        if ($AllowMissing) { return $false }
+        throw (New-SyncError 'This copy has not been set up yet.' $redo)
     }
     try { $cfg = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json }
-    catch { throw (New-SyncError 'The settings file sm-sync.config.json is damaged and cannot be read.' 'Ask whoever set this up to send the file again, and replace yours with it.') }
+    catch { throw (New-SyncError 'The settings file sm-sync.config.json is damaged and cannot be read.' "Delete it from the tool's folder ($PSScriptRoot) and open the tool again, which starts the setup.") }
     foreach ($field in 'Endpoint', 'Bucket', 'AccessKeyId', 'SecretAccessKey', 'SaveName') {
         $value = [string]$cfg.$field
         if (-not $value -or $value -match 'YOUR_|PASTE_') {
-            throw (New-SyncError "The settings file is not finished: '$field' has not been filled in." 'Open sm-sync.config.json in Notepad and paste the missing value in.')
+            if ($AllowMissing) { return $false }
+            throw (New-SyncError "The settings file is not finished: '$field' has not been filled in." $redo)
         }
     }
-    $script:Config = $cfg
-    $script:Prefix = ($cfg.SaveName -replace '[^A-Za-z0-9_-]', '_')
-    $script:StateKey = "$script:Prefix/state.json"
-    $script:Http = New-Object System.Net.Http.HttpClient
-    $script:Http.Timeout = [TimeSpan]::FromMinutes(30)
+    Use-Config $cfg
+    return $true
+}
+
+function Get-SaveRoot {
+    if ($env:SMSYNC_SAVE_ROOT) { return $env:SMSYNC_SAVE_ROOT }   # tests only
+    return (Join-Path $env:APPDATA 'Axolot Games\Scrap Mechanic\User')
 }
 
 function Initialize-Player {
@@ -749,7 +817,7 @@ function Initialize-SavePath {
         if (Test-Path -LiteralPath $cached) { $folder = $cached }
     }
     if (-not $folder) {
-        $root = Join-Path $env:APPDATA 'Axolot Games\Scrap Mechanic\User'
+        $root = Get-SaveRoot
         $candidates = @()
         if (Test-Path -LiteralPath $root) {
             $candidates = @(Get-ChildItem -LiteralPath $root -Directory -Filter 'User_*' |
@@ -1312,7 +1380,9 @@ function Show-Help {
             '[S] DESKTOP SHORTCUT: puts a shortcut to this tool on your desktop. Always start the game from it, not from Steam.',
             '[J] JOIN YOUR FRIEND: shown while your friend has the world. Starts the game and connects you to them as a guest. Nothing is checked out or uploaded by you.',
             '[A] ACTIVITY: who played when, for how long, and the message they left.',
-            '[D] DIAGNOSTICS: checks that everything is set up correctly and copies a report you can paste to whoever set this up.')),
+            '[F] INVITE A FRIEND: shows the invite code for this world and copies a message you can send. Send it privately: the code is the key to the world.',
+            '[D] DIAGNOSTICS: checks that everything is set up correctly and copies a report you can paste to whoever set this up. Names, keys and Steam IDs are taken out of it.',
+            '[I] REPORT ISSUE: for a fault in the tool itself. Opens a new issue on GitHub in your browser with the same report filled in. You see it before anything is sent.')),
         @('PLAYING TOGETHER AT THE SAME TIME', @(
             'When you are both online you can still play together the normal way.',
             'ONE of you presses 1 here and hosts the world. The other opens this tool, sees CHECKED OUT BY the host, and presses J. That starts the game without checking anything out and connects it to the host, who must already be inside the world.',
@@ -1453,11 +1523,10 @@ function Request-ShortcutOnce {
     Set-Content -LiteralPath $marker -Value (Get-Date -Format 'o') -Encoding ASCII
 }
 
-function Invoke-Doctor {
-    # Checks the things that cannot be seen from the menu.
-    Say-Step "Version $script:Version. Save file: $script:SavePath"
-    [void](Read-State)
-    Say-Good 'The online storage is reachable and the keys work.'
+function Test-ConditionalWrites {
+    # Writes a small object twice with "only if it does not exist". $true when the second
+    # write is refused, which is what stops two players checking out at once. It also
+    # proves the keys may write and delete.
     $key = "$script:Prefix/_doctor.txt"
     $body = [byte[]](120)
     try { [void](Invoke-Remote -Method 'DELETE' -Key $key) } catch { }
@@ -1466,13 +1535,26 @@ function Invoke-Doctor {
     try { [void](Invoke-Remote -Method 'PUT' -Key $key -Body $body -IfNoneMatch) }
     catch { if (Test-Conflict $_) { $refused = $true } else { throw } }
     [void](Invoke-Remote -Method 'DELETE' -Key $key)
+    return $refused
+}
+
+function Invoke-Doctor {
+    # Checks the things that cannot be seen from the menu.
+    # Redacted on screen too: people post photos of this screen.
+    Say-Step ("Version $script:Version. Save file: " + (Protect-Text $script:SavePath))
+    [void](Read-State)
+    Say-Good 'The online storage is reachable and the keys work.'
+    $refused = Test-ConditionalWrites
     if ($refused) { Say-Good 'The storage honours conditional writes, so simultaneous check-outs are caught.' }
     else { Say-Bad 'The storage IGNORES conditional writes. Two players pressing Play in the same second would not be caught.' }
-    if ($script:Config.GitHubToken -and ([string]$script:Config.GitHubToken) -notmatch 'PASTE_') {
-        try { [void](Invoke-GitHub '/tags?per_page=1'); Say-Good 'The update key works.' }
-        catch { Say-Bad ("The update check fails: " + (Get-ExceptionChain $_)[-1].Message) }
+    try {
+        $look = Get-NewerTag
+        if ($look -eq 'off') { Say-Warn 'Automatic updates are switched off in the settings file.' }
+        elseif ($look -eq 'dev') { Say-Step 'Developer copy (git repo): automatic updates are off.' }
+        elseif ($look -eq 'current') { Say-Good 'The update check works. This is the newest version.' }
+        else { Say-Warn "The update check works. Version $look installs at the next start." }
     }
-    else { Say-Warn 'No update key in the settings file, so this copy will not update itself.' }
+    catch { Say-Bad ("The update check fails: " + (Get-ExceptionChain $_)[-1].Message) }
     $stored = Get-RemoteKeys
     Say-Good ("The storage holds {0} objects for this world." -f $stored.Count)
     $exe = Find-GameExe
@@ -1543,54 +1625,172 @@ function Show-Activity {
     }
 }
 
-function Show-Diagnostics {
+function Protect-Text([string]$Text, [string[]]$Names) {
+    # Removes what could identify a player or open the storage from text that is about to
+    # leave this PC in a report: keys, the storage address, Steam IDs, the Windows user
+    # name, player names, and the names of the world and the bucket.
+    if (-not $Text) { return '' }
+    $t = $Text
+    $cfg = $script:Config
+    foreach ($secret in @([string]$cfg.SecretAccessKey, [string]$cfg.AccessKeyId, [string]$cfg.GitHubToken)) {
+        if ($secret -and $secret.Length -ge 8) { $t = $t.Replace($secret, '<key>') }
+    }
+    try { if ($cfg.Endpoint) { $t = $t.Replace(([Uri][string]$cfg.Endpoint).Host, '<storage address>') } } catch { }
+    $t = [regex]::Replace($t, '(?i)(?<![0-9a-z])[0-9a-f]{32,}(?![0-9a-z])', '<hex>')
+    $t = [regex]::Replace($t, 'User_\d{17}', 'User_<steam id>')
+    $t = [regex]::Replace($t, '(?<!\d)7656\d{13}(?!\d)', '<steam id>')
+    $t = [regex]::Replace($t, '(?i)([A-Z]:\\Users\\)[^\\"]+(?=\\)', '${1}<user>')
+    # Whole words only, and nothing shorter than three characters, or ordinary text would be mangled.
+    $words = @(
+        @([string]$env:USERNAME, '<user>'), @([string]$env:COMPUTERNAME, '<pc>'),
+        @([string]$cfg.SaveName, '<world>'), @([string]$script:Prefix, '<world>'), @([string]$cfg.Bucket, '<bucket>')
+    )
+    $n = 0
+    foreach ($name in @($Names | Where-Object { $_ } | Select-Object -Unique)) { $n++; $words += , @([string]$name, "<player $n>") }
+    foreach ($pair in $words) {
+        if ($pair[0].Length -ge 3) { $t = [regex]::Replace($t, '(?i)(?<![A-Za-z0-9])' + [regex]::Escape($pair[0]) + '(?![A-Za-z0-9])', $pair[1]) }
+    }
+    return $t
+}
+
+function Get-DiagnosticsReport {
+    # Runs the checks on screen and returns the report with everything personal removed:
+    # Head is the summary and the check results, Log the last lines of the log.
     $script:Transcript = New-Object 'System.Collections.Generic.List[string]'
-    try { Invoke-Doctor }
+    $names = @($script:Player)
+    $world = 'unknown'
+    try {
+        Invoke-Doctor
+        $state = Read-State
+        if (-not $state) { $world = 'nothing uploaded yet' }
+        elseif (-not $state.holder) { $world = 'available' }
+        elseif ($state.holder -eq $script:Player) { $world = 'checked out by this player' }
+        else { $world = 'checked out by another player' }
+        if ($state) {
+            $names += $state.holder
+            foreach ($h in $state.history) { $names += $h.by }
+            foreach ($s in $state.sessions) { $names += $s.by }
+        }
+    }
     catch { Show-Error $_; Add-Transcript ('XX  ' + (Get-ExceptionChain $_)[-1].Message) }
     $lines = @($script:Transcript)
     $script:Transcript = $null
     $console = 'classic console'; if ($env:WT_SESSION) { $console = 'Windows Terminal' }
-    $report = @(
-        "Scrap Mechanic Sync v$script:Version diagnostics, $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
-        "Player: $script:Player"
+    $head = @(
+        "Scrap Mechanic Sync v$script:Version, $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
         "Windows $([Environment]::OSVersion.Version), PowerShell $($PSVersionTable.PSVersion), $console"
+        "World: $world"
         ''
-    ) + $lines + @('', 'Last log lines:') + @(Get-Content -LiteralPath $script:LogPath -Tail 12 -ErrorAction SilentlyContinue)
-    if ($env:SMSYNC_NO_CLIPBOARD) { return }
-    try {
-        Set-Clipboard -Value ($report -join "`r`n")
-        Say-Good 'This report is copied. Paste it into a message to whoever set this up (Ctrl+V).'
+    ) + $lines
+    $log = @(Get-Content -LiteralPath $script:LogPath -Tail 12 -ErrorAction SilentlyContinue)
+    return @{
+        Head = @($head | ForEach-Object { Protect-Text $_ $names })
+        Log  = @($log | ForEach-Object { Protect-Text $_ $names })
     }
-    catch { Say-Warn 'The report could not be copied. Take a photo of this window instead.' }
+}
+
+function Join-Report($Report, [string]$NewLine) {
+    return ((@($Report.Head) + @('', 'Last log lines:') + @($Report.Log)) -join $NewLine)
+}
+
+function Copy-Report($Report) {
+    # $true when the report reached the clipboard. Tests read it from SMSYNC_REPORT_FILE.
+    $text = Join-Report $Report "`r`n"
+    if ($env:SMSYNC_REPORT_FILE) { Set-Content -LiteralPath $env:SMSYNC_REPORT_FILE -Value $text -Encoding UTF8 }
+    if ($env:SMSYNC_NO_CLIPBOARD) { return $false }
+    try { Set-Clipboard -Value $text; return $true } catch { return $false }
+}
+
+function Show-Diagnostics {
+    $report = Get-DiagnosticsReport
+    if (Copy-Report $report) {
+        Say-Good 'This report is copied. Paste it into a message to whoever set this up (Ctrl+V).'
+        Say '      Names, keys, Steam IDs and your Windows user name have been taken out of it.' 'Dim'
+    }
+    elseif (-not $env:SMSYNC_NO_CLIPBOARD) { Say-Warn 'The report could not be copied. Take a photo of this window instead.' }
+}
+
+function Get-IssueUrl($Report) {
+    # The new-issue page with the form already filled in. A link opened from Windows is cut
+    # off at about 2,000 characters, so the oldest log lines are dropped until it fits.
+    $repo = $script:DefaultRepo
+    if ($script:Config.GitHubRepo) { $repo = [string]$script:Config.GitHubRepo }
+    $base = "https://github.com/$repo/issues/new?template=bug_report.yml&version=" + [Uri]::EscapeDataString($script:Version) + '&diagnostics='
+    $log = @($Report.Log)
+    while ($true) {
+        $text = (@($Report.Head) + @('', 'Last log lines:') + $log) -join "`n"
+        $url = $base + [Uri]::EscapeDataString($text)
+        if ($url.Length -le 1900 -or $log.Count -eq 0) { break }
+        $log = @($log | Select-Object -Skip 1)
+    }
+    while ($url.Length -gt 1900) {
+        $text = $text.Substring(0, $text.Length - 50)
+        $url = $base + [Uri]::EscapeDataString($text)
+    }
+    return $url
+}
+
+function Send-IssueReport {
+    Say-Wrapped '  ' 'Text' 'This runs the checks, builds a report and opens a new issue on GitHub in your browser with the report already filled in. Nothing is sent until you press the green button on that page. You need a GitHub account, which is free.'
+    $report = Get-DiagnosticsReport
+    Say ''
+    Say '  THIS IS WHAT THE ISSUE WILL CONTAIN' 'Amber'
+    Say ''
+    foreach ($line in (@($report.Head) + @('', 'Last log lines:') + @($report.Log))) { Say-Wrapped '    ' 'Dim' $line 'Dim' }
+    Say ''
+    Say-Wrapped '  ' 'Text' 'Names, keys, Steam IDs, your Windows user name and the name of your world have been taken out. Read it through. The issue will be public.'
+    $copied = Copy-Report $report
+    if ($copied) { Say-Good 'The full report is also copied, in case the page shows it cut short (paste with Ctrl+V).' }
+    if (-not (Confirm-Yes 'Open the issue page in your browser?')) { Say-Step 'Nothing was opened or sent.'; return }
+    Write-Log 'opened the issue page'
+    Open-Link (Get-IssueUrl $report)
+    Say-Step 'On the page, describe what happened in your own words, then press "Create".'
 }
 
 # ================================================================ self-update
 
 function Invoke-GitHub([string]$Path, [string]$OutFile) {
+    # The repository is public, so no key is needed. A key left in an older settings file
+    # is still sent, and dropped for the rest of this run once GitHub rejects it.
     $cfg = $script:Config
     $api = 'https://api.github.com'
     if ($cfg.GitHubApi) { $api = ([string]$cfg.GitHubApi).TrimEnd('/') }
+    $repo = $script:DefaultRepo
+    if ($cfg.GitHubRepo) { $repo = [string]$cfg.GitHubRepo }
+    $token = [string]$cfg.GitHubToken
+    if ($token -match 'PASTE_' -or $script:TokenRejected) { $token = '' }
     $client = New-Object System.Net.Http.HttpClient
     $client.Timeout = [TimeSpan]::FromSeconds(60)
-    $request = New-Object System.Net.Http.HttpRequestMessage -ArgumentList ([System.Net.Http.HttpMethod]::Get), "$api/repos/$($cfg.GitHubRepo)$Path"
     try {
-        [void]$request.Headers.TryAddWithoutValidation('User-Agent', 'sm-sync')
-        [void]$request.Headers.TryAddWithoutValidation('Accept', 'application/vnd.github+json')
-        [void]$request.Headers.TryAddWithoutValidation('Authorization', "Bearer $($cfg.GitHubToken)")
-        $response = $client.SendAsync($request).GetAwaiter().GetResult()
-        $status = [int]$response.StatusCode
-        if ($status -eq 401 -or $status -eq 403 -or $status -eq 404) { throw "the update key was rejected (code $status). It may have expired." }
-        if ($status -lt 200 -or $status -ge 300) { throw "GitHub answered with code $status." }
-        if ($OutFile) { [IO.File]::WriteAllBytes($OutFile, $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()); return $null }
-        return $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        while ($true) {
+            $request = New-Object System.Net.Http.HttpRequestMessage -ArgumentList ([System.Net.Http.HttpMethod]::Get), "$api/repos/$repo$Path"
+            try {
+                [void]$request.Headers.TryAddWithoutValidation('User-Agent', 'sm-sync')
+                [void]$request.Headers.TryAddWithoutValidation('Accept', 'application/vnd.github+json')
+                if ($token) { [void]$request.Headers.TryAddWithoutValidation('Authorization', "Bearer $token") }
+                $response = $client.SendAsync($request).GetAwaiter().GetResult()
+                $status = [int]$response.StatusCode
+                if ($status -eq 401 -and $token) {
+                    Write-Log 'the update key was rejected, carrying on without it'
+                    $token = ''; $script:TokenRejected = $true
+                    continue
+                }
+                if ($status -eq 403 -or $status -eq 429) { throw "GitHub is limiting requests from this connection (code $status). The next check will try again." }
+                if ($status -eq 404) { throw "the update source $repo was not found (code 404)." }
+                if ($status -lt 200 -or $status -ge 300) { throw "GitHub answered with code $status." }
+                if ($OutFile) { [IO.File]::WriteAllBytes($OutFile, $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()); return $null }
+                return $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            }
+            finally { $request.Dispose() }
+        }
     }
-    finally { $request.Dispose(); $client.Dispose() }
+    finally { $client.Dispose() }
 }
 
 function Get-NewerTag {
     # Returns 'off', 'dev', 'current', or the name of a release tag newer than this copy.
     $cfg = $script:Config
-    if (-not $cfg.GitHubRepo -or -not $cfg.GitHubToken -or ([string]$cfg.GitHubToken) -match 'PASTE_') { return 'off' }
+    if ($null -ne $cfg.AutoUpdate -and -not [bool]$cfg.AutoUpdate) { return 'off' }
     if (Test-Path -LiteralPath (Join-Path $PSScriptRoot '.git')) { return 'dev' }
 
     $best = $null; $bestTag = ''
@@ -1698,6 +1898,287 @@ function Invoke-UpdateCheck {
     return $null
 }
 
+# ================================================================ invite codes and setup
+
+function New-InviteCode {
+    # The storage settings as one line of text. Whoever has it can read and write the world.
+    $c = $script:Config
+    $bytes = [Text.Encoding]::UTF8.GetBytes((@([string]$c.Endpoint, [string]$c.Bucket, [string]$c.AccessKeyId, [string]$c.SecretAccessKey, [string]$c.SaveName) -join "`n"))
+    $text = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    return ('{0}:{1}:{2}' -f $script:InvitePrefix, $text, (Get-Sha256Hex $bytes).Substring(0, 6))
+}
+
+function Read-InviteCode([string]$Text) {
+    # Finds an invite code anywhere in $Text, even when a chat app wrapped it over several
+    # lines. Returns the settings, or $null when there is no complete code.
+    if (-not $Text) { return $null }
+    $m = [regex]::Match(($Text -replace '\s', ''), [regex]::Escape($script:InvitePrefix) + ':([A-Za-z0-9_-]+):([0-9a-f]{6})')
+    if (-not $m.Success) { return $null }
+    try {
+        $b64 = $m.Groups[1].Value.Replace('-', '+').Replace('_', '/')
+        $b64 += '=' * ((4 - $b64.Length % 4) % 4)
+        $bytes = [Convert]::FromBase64String($b64)
+        if ((Get-Sha256Hex $bytes).Substring(0, 6) -ne $m.Groups[2].Value) { return $null }
+        $parts = [Text.Encoding]::UTF8.GetString($bytes) -split "`n"
+        if ($parts.Count -ne 5) { return $null }
+        return [pscustomobject][ordered]@{ Endpoint = $parts[0]; Bucket = $parts[1]; AccessKeyId = $parts[2]; SecretAccessKey = $parts[3]; SaveName = $parts[4] }
+    }
+    catch { return $null }
+}
+
+function Show-Invite {
+    $code = New-InviteCode
+    $repo = $script:DefaultRepo
+    if ($script:Config.GitHubRepo) { $repo = [string]$script:Config.GitHubRepo }
+    $message = @(
+        "Join my shared Scrap Mechanic world ""$($script:Config.SaveName)"" with Scrap Mechanic Sync:"
+        ''
+        "1. Download https://github.com/$repo/releases/latest/download/Scrap-Mechanic-Sync.zip"
+        '2. Right-click the zip, choose Extract All, and open the extracted folder.'
+        '3. Double-click "Scrap Mechanic Sync".'
+        '4. Copy this whole message, then press 1 for "I have an invite code".'
+        ''
+        $code
+        ''
+        'Keep this message private. The code is the key to our world.'
+    ) -join "`r`n"
+    Say-Wrapped '  ' 'Text' 'An invite code lets a friend join this shared world. They download the tool, start it, and it picks the code up from their clipboard. They never need a Cloudflare account.'
+    Say ''
+    foreach ($line in ($code -split '(?<=\G.{64})')) { if ($line) { Say "    $line" 'Orange' } }
+    Say ''
+    Say-Wrapped '  ' 'Text' 'Anyone who has this code can download, replace or delete the shared world. Send it in a private message, never in a public channel or a screenshot.' 'Amber'
+    $copied = $false
+    if (-not $env:SMSYNC_NO_CLIPBOARD) { try { Set-Clipboard -Value $message; $copied = $true } catch { } }
+    if ($copied) { Say-Good 'A message with the download link, the steps and the code is copied. Paste it to your friend (Ctrl+V).' }
+    else { Say-Step 'Select the code above with the mouse and copy it to send it.' }
+}
+
+function Get-LocalWorlds {
+    # Every Survival world on this PC, newest first.
+    $root = Get-SaveRoot
+    $found = @()
+    if (Test-Path -LiteralPath $root) {
+        foreach ($user in @(Get-ChildItem -LiteralPath $root -Directory -Filter 'User_*')) {
+            $folder = Join-Path $user.FullName 'Save\Survival'
+            if (Test-Path -LiteralPath $folder) { $found += @(Get-ChildItem -LiteralPath $folder -File -Filter '*.db') }
+        }
+    }
+    return , @($found | Sort-Object LastWriteTime -Descending | Select-Object -First 15)
+}
+
+function ConvertTo-Endpoint([string]$Text) {
+    # Accepts the S3 address Cloudflare shows (with or without a path), or the bare account ID.
+    $t = $Text.Trim().Trim('"').Trim("'")
+    if ($t -match '^[0-9a-fA-F]{32}$') { return ('https://{0}.r2.cloudflarestorage.com' -f $t.ToLowerInvariant()) }
+    if ($t -notmatch '^https?://') {
+        if ($t -match '^[A-Za-z0-9.-]+\.[A-Za-z]{2,}') { $t = "https://$t" } else { return '' }
+    }
+    try { return ([Uri]$t).GetLeftPart([UriPartial]::Authority) } catch { return '' }
+}
+
+function Show-SetupHeader([int]$Step, [string]$Title) { Show-Header ("Setup {0} of 5  -  {1}" -f $Step, $Title) }
+
+function Read-SetupKey([string]$Url) {
+    # [O] opens $Url, [C] carries on, [Q] leaves the setup. Returns $false for Q.
+    Say ''
+    Write-Seg @('  [O] ', 'Orange', 'Open that page in your browser   ', 'Text', '[C] ', 'Orange', 'Continue   ', 'Text', '[Q] ', 'Orange', 'Leave the setup', 'Text')
+    while ($true) {
+        $k = Read-Key 'OCQ'
+        if ($k -eq 'O') { Open-Link $Url; continue }
+        return ($k -eq 'C')
+    }
+}
+
+function Select-SetupWorld {
+    # Step 1 for a host. Returns the chosen save file, or $null to leave the setup.
+    while ($true) {
+        Show-SetupHeader 1 'Which world do you want to share?'
+        $worlds = Get-LocalWorlds
+        if ($worlds.Count -eq 0) {
+            Say-Wrapped '  ' 'Text' 'No Survival world was found on this PC. Start Scrap Mechanic, create a Survival world, quit the game, then look again.'
+            Say ''
+            Write-Seg @('  [R] ', 'Orange', 'Look again   ', 'Text', '[Q] ', 'Orange', 'Leave the setup', 'Text')
+            if ((Read-Key 'RQ') -eq 'Q') { return $null }
+            continue
+        }
+        Say-Wrapped '  ' 'Text' 'These are the Survival worlds on this PC, the one played most recently first. Pick the one you and your friends will share. Your other worlds are not touched.'
+        Say ''
+        $pad = 2 + ($worlds | ForEach-Object { $_.BaseName.Length } | Measure-Object -Maximum).Maximum
+        for ($i = 0; $i -lt $worlds.Count; $i++) {
+            Write-Seg @(("  [{0,2}] " -f ($i + 1)), 'Orange', $worlds[$i].BaseName.PadRight($pad), 'Text', ('{0,9}   last played {1}' -f (Format-Size $worlds[$i].Length), (Format-LocalTime $worlds[$i].LastWriteTime)), 'Dim')
+        }
+        Say ''
+        $pick = 0
+        $answer = Read-Line 'Number of the world, or Q to leave:'
+        if ($answer -match '^[Qq]' -or (-not $script:Interactive -and -not $answer)) { return $null }
+        if ([int]::TryParse($answer, [ref]$pick) -and $pick -ge 1 -and $pick -le $worlds.Count) { return $worlds[$pick - 1] }
+    }
+}
+
+function Test-StorageSetup {
+    # Throws with an explanation when the storage cannot be used with the settings in $script:Config.
+    Say-Step 'Connecting to the storage ...'
+    $state = Read-State
+    Say-Good 'The storage accepted the keys.'
+    if (Test-ConditionalWrites) { Say-Good 'The keys can write, and the storage catches two players checking out at once.' }
+    else { Say-Warn 'The keys can write, but this storage does not catch two players checking out in the same second. Cloudflare R2 does. With another provider, agree who plays before you press Play.' }
+    return $state
+}
+
+function Invoke-HostSetup {
+    # Walks a host through the storage. Returns $true when the settings file was written.
+    $world = Select-SetupWorld
+    if (-not $world) { return $false }
+    $cfg = [ordered]@{ Endpoint = ''; Bucket = ''; AccessKeyId = ''; SecretAccessKey = ''; SaveName = $world.BaseName }
+    $stage = 'bucket'
+    while ($true) {
+        if ($stage -eq 'bucket') {
+            Show-SetupHeader 2 'Create the online storage'
+            Say-Wrapped '  ' 'Text' 'The world is kept in Cloudflare R2, an online storage service. Only you need an account. Your friends get an invite code from you.'
+            Say ''
+            Say-Wrapped '    1.  ' 'Orange' 'Sign in at dash.cloudflare.com, or create a free account there.'
+            Say-Wrapped '    2.  ' 'Orange' 'In the menu on the left, open "R2 Object Storage". The first time, Cloudflare asks for a payment card to switch R2 on. A shared world stays far inside the free allowance of 10 GB.'
+            Say-Wrapped '    3.  ' 'Orange' 'Press "Create bucket". Name it scrap-mechanic, leave every other setting as it is, and create it.'
+            if (-not (Read-SetupKey 'https://dash.cloudflare.com/?to=/:account/r2/overview')) { return $false }
+            Say ''
+            while ($true) {
+                $name = Read-Line 'Name of the bucket (press Enter for scrap-mechanic):'
+                if (-not $name) { $name = 'scrap-mechanic' }
+                if ($name -cmatch '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$') { $cfg.Bucket = $name; break }
+                Say-Warn 'A bucket name has 3 to 63 characters: small letters, digits and hyphens only.'
+                if (-not $script:Interactive) { return $false }
+            }
+            $stage = 'keys'
+        }
+        elseif ($stage -eq 'keys') {
+            Show-SetupHeader 3 'Create the keys'
+            Say-Wrapped '  ' 'Text' 'The tool needs keys that can read and write that one bucket and nothing else in your account.'
+            Say ''
+            Say-Wrapped '    1.  ' 'Orange' 'On the R2 page, find "API Tokens" and press "Manage", then "Create Account API token".'
+            Say-Wrapped '    2.  ' 'Orange' 'Permission: "Object Read & Write".'
+            Say-Wrapped '    3.  ' 'Orange' ('Under "Specify bucket(s)", choose "Apply to specific buckets only" and tick ' + $cfg.Bucket + '.')
+            Say-Wrapped '    4.  ' 'Orange' 'Press "Create". Cloudflare now shows the values ONCE. Keep that page open and paste three of them below.'
+            if (-not (Read-SetupKey 'https://dash.cloudflare.com/?to=/:account/r2/api-tokens')) { return $false }
+            Say ''
+            Say '  Paste with Ctrl+V or a right-click, then press Enter.' 'Dim'
+            Say ''
+            while ($true) {
+                $endpoint = ConvertTo-Endpoint (Read-Text 'The S3 address (starts with https://):')
+                if ($endpoint) { $cfg.Endpoint = $endpoint; break }
+                Say-Warn 'That is not a web address. It is shown under "Use jurisdiction-specific endpoints for S3 clients" and ends in r2.cloudflarestorage.com.'
+                if (-not $script:Interactive) { return $false }
+            }
+            foreach ($field in @(@('AccessKeyId', 'Access Key ID:', 32), @('SecretAccessKey', 'Secret Access Key:', 64))) {
+                while ($true) {
+                    $value = Read-Text $field[1] -Mask:($field[0] -eq 'SecretAccessKey')
+                    if (-not $value) { if (-not $script:Interactive) { return $false }; continue }
+                    if ($value.Length -eq $field[2] -or $cfg.Endpoint -notmatch 'cloudflarestorage') { break }
+                    if (Confirm-Yes ("Cloudflare's value has {0} characters and this has {1}. Use it anyway?" -f $field[2], $value.Length)) { break }
+                }
+                $cfg[$field[0]] = $value
+            }
+            $stage = 'test'
+        }
+        else {
+            Show-SetupHeader 4 'Test the connection'
+            Use-Config ([pscustomobject]$cfg)
+            try {
+                $state = Test-StorageSetup
+                if ($state) { Say-Warn "This bucket already holds a world named '$($cfg.SaveName)'. Yours will not replace it. To join that world, leave the setup and use an invite code instead." }
+                Save-Config $cfg
+                Set-Content -LiteralPath (Join-Path $script:HomeDir 'savefolder.txt') -Value $world.DirectoryName -Encoding UTF8
+                Write-Log 'setup finished as host'
+                Say-Good 'The settings are saved.'
+                Wait-Key 'Press any key to continue'
+                return $true
+            }
+            catch {
+                Show-Error $_
+                Say ''
+                Write-Seg @('  [K] ', 'Orange', 'Enter the keys again   ', 'Text', '[B] ', 'Orange', 'Change the bucket name   ', 'Text', '[T] ', 'Orange', 'Test again   ', 'Text', '[Q] ', 'Orange', 'Leave the setup', 'Text')
+                $k = Read-Key 'KBTQ'
+                if ($k -eq 'Q') { return $false }
+                if ($k -eq 'K') { $stage = 'keys' } elseif ($k -eq 'B') { $stage = 'bucket' }
+            }
+        }
+    }
+}
+
+function Invoke-JoinSetup {
+    # Sets this copy up from a friend's invite code. Returns $true when the settings were written.
+    Show-Header 'Setup  -  Join with an invite code'
+    $cfg = Read-InviteCode (Get-ClipboardText)
+    if ($cfg) { Say-Good 'Found an invite code in your clipboard.' }
+    else {
+        Say-Wrapped '  ' 'Text' 'Copy the message your friend sent you, the whole of it, then paste it here with Ctrl+V or a right-click and press Enter.'
+        Say ''
+        while (-not $cfg) {
+            $text = Read-Text 'Invite code (or just Enter to go back):'
+            if (-not $text) { return $false }
+            $cfg = Read-InviteCode $text
+            if (-not $cfg) { Say-Warn ('That is not a complete invite code. It starts with ' + $script:InvitePrefix + ': and is one long line. Copy all of it and try again.') }
+        }
+    }
+    Use-Config $cfg
+    try {
+        Say-Step 'Connecting to the storage ...'
+        $state = Read-State
+        if ($state) { Say-Good "Connected. The shared world is '$($cfg.SaveName)', version $($state.version)." }
+        else { Say-Warn "Connected, but nothing has been uploaded yet. Your friend has to upload '$($cfg.SaveName)' first." }
+    }
+    catch {
+        Show-Error $_
+        Say-Wrapped '  ' 'Text' 'The code was read correctly but the storage did not accept it. Ask your friend for a new code. Nothing was saved.' 'Amber'
+        $script:Config = [pscustomobject]@{}
+        Wait-Key 'Press any key to go back'
+        return $false
+    }
+    Save-Config $cfg
+    Write-Log 'setup finished with an invite code'
+    Say-Good 'The settings are saved.'
+    Wait-Key 'Press any key to continue'
+    return $true
+}
+
+function Invoke-Setup {
+    # The first run. Returns 'host' or 'guest' once the settings file exists, or '' when
+    # the player leaves without finishing.
+    while ($true) {
+        Clear-Screen
+        Show-Banner
+        Say '  Welcome. This copy is not set up yet.' 'Amber'
+        Say ''
+        $hint = 'a friend already shares a world and sent me a code'
+        if (Read-InviteCode (Get-ClipboardText)) { $hint = 'a code is in your clipboard, ready to use' }
+        Write-Seg @('  [1] ', 'Orange', 'I have an invite code       ', 'Text', $hint, 'Dim')
+        Write-Seg @('  [2] ', 'Orange', 'Set up a new shared world   ', 'Text', 'I create the storage for my group (about 10 minutes)', 'Dim')
+        Say ''
+        Write-Seg @('  [H] ', 'Orange', 'How this works   ', 'Text', '[Q] ', 'Orange', 'Quit', 'Text')
+        Say ''
+        switch (Read-Key '12HQ') {
+            '1' { if (Invoke-JoinSetup) { return 'guest' } }
+            '2' { if (Invoke-HostSetup) { return 'host' } }
+            'H' { Show-Help }
+            'Q' { return '' }
+        }
+    }
+}
+
+function Complete-HostSetup {
+    # The last step for a host, once the player name and the save path are known.
+    Show-SetupHeader 5 'Upload the world and invite your friends'
+    Say-Wrapped '  ' 'Text' "Your copy of '$($script:Config.SaveName)' is uploaded now as the starting point. From then on, every player starts the game from this tool."
+    try { Exit-Turn }
+    catch { Show-Error $_; Say-Wrapped '  ' 'Text' 'You can upload later with [2] Finish session in the menu.' 'Amber' }
+    Say ''
+    Say ('  ' + ($script:Ch.H * ($script:W + 2))) 'Dim'
+    Say ''
+    Show-Invite
+    Say ''
+    Say-Wrapped '  ' 'Text' 'You can show the invite again at any time with [F] in the menu.' 'Dim'
+    Wait-Key 'Press any key to open the menu'
+}
+
 # ================================================================ menu
 
 function Invoke-Screen([string]$Title, [scriptblock]$Body) {
@@ -1775,7 +2256,7 @@ function Get-ModelSignature($Model) {
 function Write-MenuBlock($Items, [int]$Selected, [switch]$Again) {
     # Draws the menu rows and the footer. With -Again it first moves the cursor back up
     # and draws over the previous copy, so moving the highlight does not redraw the screen.
-    $footerLines = 4
+    $footerLines = 5
     if ($Again -and $script:Fancy) { Write-Host "$($script:E)[$($Items.Count + $footerLines)A`r" -NoNewline }
     $pad = 2 + ($Items | ForEach-Object { $_.Label.Length } | Measure-Object -Maximum).Maximum
     # Every row must fit on one line, or the cursor arithmetic above would be wrong.
@@ -1789,14 +2270,15 @@ function Write-MenuBlock($Items, [int]$Selected, [switch]$Again) {
         else { Write-Seg @("  [$($it.Key)] ", 'Orange', $it.Label.PadRight($pad), 'Text', $tail, 'Dim') }
     }
     Say ''
-    Write-Seg @('  [A] ', 'Orange', 'Activity   ', 'Text', '[D] ', 'Orange', 'Diagnostics   ', 'Text', '[S] ', 'Orange', 'Shortcut   ', 'Text', '[R] ', 'Orange', 'Refresh   ', 'Text', '[H] ', 'Orange', 'Help   ', 'Text', '[Q] ', 'Orange', 'Quit', 'Text')
+    Write-Seg @('  [A] ', 'Orange', 'Activity   ', 'Text', '[F] ', 'Orange', 'Invite a friend   ', 'Text', '[D] ', 'Orange', 'Diagnostics   ', 'Text', '[I] ', 'Orange', 'Report issue', 'Text')
+    Write-Seg @('  [S] ', 'Orange', 'Shortcut   ', 'Text', '[R] ', 'Orange', 'Refresh   ', 'Text', '[H] ', 'Orange', 'Help   ', 'Text', '[Q] ', 'Orange', 'Quit', 'Text')
     Say ''
     if ($script:Interactive) { Say '  Up and Down arrows then Enter, or press a key.' 'Dim' } else { Say '  Press a key:' 'Amber' }
 }
 
 function Read-MenuChoice($Items, [int]$Selected, [string]$Signature) {
     # Returns the key of the chosen row or hotkey, or 'REFRESH' when the status changed.
-    $keys = (($Items | Where-Object { -not $_.Why } | ForEach-Object { $_.Key }) -join '') + 'ADSRHQ'
+    $keys = (($Items | Where-Object { -not $_.Why } | ForEach-Object { $_.Key }) -join '') + 'ADFISRHQ'
     if (-not $script:Interactive) { return (Read-Key $keys) }
     $nextLook = (Get-Date).AddSeconds(30)
     while ($true) {
@@ -1854,7 +2336,7 @@ function Show-Menu {
         # Fit the window: drop the spacer rows in the status box first, then the big banner.
         $rows = Get-StatusRows $model
         $spacers = 0; foreach ($row in $rows) { if ($null -eq $row) { $spacers++ } }
-        $rest = 1 + $items.Count + 4 + 1
+        $rest = 1 + $items.Count + 5 + 1
         if ($script:Notice) { $rest += 1 + (Split-Wrap $script:Notice ($script:W - 2)).Count }
         $height = Get-ConsoleHeight
         $compact = (9 + $rows.Count + 2 + $rest) -gt $height
@@ -1891,6 +2373,8 @@ function Show-Menu {
             'J' { Invoke-Screen 'Join your friend' { Join-FriendGame } }
             'A' { Invoke-Screen 'Activity' { Show-Activity } }
             'D' { Invoke-Screen 'Diagnostics' { Show-Diagnostics } }
+            'F' { Invoke-Screen 'Invite a friend' { Show-Invite } }
+            'I' { Invoke-Screen 'Report an issue' { Send-IssueReport } }
             'H' { Show-Help }
             'R' { $script:Notice = '' }
             'UPDATE' {
@@ -1909,7 +2393,7 @@ try {
     if ($Action -eq 'selftest') { if (Invoke-SelfTest) { exit 0 } else { exit 1 } }
     try { $Host.UI.RawUI.WindowTitle = 'Scrap Mechanic Sync' } catch { }
     Write-Log "start v$script:Version action=$Action"
-    Initialize-Config
+    $configured = Initialize-Config -AllowMissing:($Action -eq 'menu' -or $Action -eq 'setup')
 
     if ($Action -eq 'update') {
         $result = Update-Self
@@ -1929,8 +2413,24 @@ try {
         else { Show-WhatsNew $UpdatedFrom }
     }
 
+    $role = ''
+    $proceed = $true
+    if ($Action -eq 'setup' -and $configured) {
+        Show-Header 'Setup'
+        $proceed = Confirm-Yes 'This copy is already set up. Run the setup again and replace its settings?'
+        $configured = -not $proceed
+        $proceed = $true
+    }
+    if (-not $configured) {
+        $role = Invoke-Setup
+        if ($role) { [void](Initialize-Config) } else { $proceed = $false }
+    }
+    if ($Action -eq 'setup') { $Action = 'menu' }
+
+    if ($proceed) {
     Initialize-Player
     Initialize-SavePath
+    if ($role -eq 'host') { Complete-HostSetup }
     switch ($Action) {
         'menu'   { Request-ShortcutOnce; Show-Menu }
         'wait'   { Wait-ForAvailable }
@@ -1940,6 +2440,7 @@ try {
         'finish' { Exit-Turn -Override:$Force }
         'status' { Show-StatusPlain }
         'take'   { [void](Enter-Turn -Override) }
+    }
     }
 }
 catch {

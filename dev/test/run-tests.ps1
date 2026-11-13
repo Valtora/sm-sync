@@ -26,7 +26,7 @@ $env:SMSYNC_NO_LAUNCH = '1'
 $env:SMSYNC_STEAM_ID = '76561190000000001'
 
 function Run([string]$Player, [string[]]$Arguments, $Stdin) {
-    $shell = if ($Player -eq 'A') { 'powershell.exe' } else { 'pwsh.exe' }
+    $shell = if ($Player -in 'A', 'H') { 'powershell.exe' } else { 'pwsh.exe' }
     $env:SMSYNC_HOME = "$root\$Player\home"; $env:SMSYNC_PLAYER = $Player
     $file = "$root\$Player\app\sm-sync.ps1"
     if ($null -ne $Stdin) { $out = $Stdin | & $shell -NoProfile -ExecutionPolicy Bypass -File $file @Arguments 2>&1 }
@@ -65,8 +65,11 @@ try {
     foreach ($p in 'A', 'B') {
         New-Item -ItemType Directory -Force -Path "$root\$p\app", "$root\$p\save", "$root\$p\home" | Out-Null
         Copy-Item $script "$root\$p\app\"
-        @{ Endpoint = "http://127.0.0.1:$Port"; Bucket = 'b'; AccessKeyId = 'k'; SecretAccessKey = 's'; SaveName = $world; SaveFolder = "$root\$p\save"
-           GitHubRepo = 'o/r'; GitHubToken = 'good-token'; GitHubApi = "http://127.0.0.1:$Port" } | ConvertTo-Json | Set-Content "$root\$p\app\sm-sync.config.json"
+        $settings = @{ Endpoint = "http://127.0.0.1:$Port"; Bucket = 'b'; AccessKeyId = 'k'; SecretAccessKey = 's'; SaveName = $world; SaveFolder = "$root\$p\save"
+            GitHubApi = "http://127.0.0.1:$Port" }
+        # A has a new settings file with no update key. B still carries one GitHub now rejects.
+        if ($p -eq 'B') { $settings.GitHubRepo = 'o/r'; $settings.GitHubToken = 'expired-token' }
+        $settings | ConvertTo-Json | Set-Content "$root\$p\app\sm-sync.config.json"
     }
     # A's world: 3 MB that starts like a SQLite file. B has an unrelated old stub.
     $bytes = New-Object byte[] (3MB); (New-Object Random 1).NextBytes($bytes)
@@ -188,6 +191,43 @@ try {
     Check 'activity screen lists sessions' ((Has $o 'The last sessions') -and (Has $o 'Fuel is in the red chest'))
     Check 'diagnostics screen runs the checks' (Has $o 'honours conditional writes')
 
+    # Report issue: the report must carry nothing that identifies the player.
+    $env:SMSYNC_REPORT_FILE = "$root\report.txt"
+    $o = Run A '-NoUpdate' @('i', 'y', 'q')
+    Remove-Item Env:SMSYNC_REPORT_FILE
+    $report = Get-Content "$root\report.txt" -Raw
+    Check 'report issue opens the filled-in issue form' ((Has $o 'Would open https://github.com/Valtora/sm-sync/issues/new?template=bug_report.yml') -and (Has $o 'WHAT THE ISSUE WILL CONTAIN'))
+    Check 'report has the check results and the log' ((Has $report 'honours conditional writes') -and (Has $report 'Last log lines:'))
+    Check 'report hides the Windows user, the world and Steam IDs' (($report -notmatch [regex]::Escape($env:USERNAME)) -and -not (Has $report $world) -and -not (Has $report 'My_World') -and ($report -notmatch '7656\d{13}') -and (Has $report '<user>') -and (Has $report '<world>'))
+
+    # First run with no settings file: a host goes through the setup on Windows PowerShell 5.1.
+    $wizWorld = 'Wizard World'
+    foreach ($p in 'H', 'G') {
+        New-Item -ItemType Directory -Force -Path "$root\$p\app", "$root\$p\home", "$root\$p\saves\User_76561190000000002\Save\Survival" | Out-Null
+        Copy-Item $script "$root\$p\app\"
+    }
+    $wizSave = "$root\H\saves\User_76561190000000002\Save\Survival\$wizWorld.db"
+    [IO.File]::WriteAllBytes($wizSave, $bytes)
+    $env:SMSYNC_SAVE_ROOT = "$root\H\saves"
+    $o = Run H '-NoUpdate' @('2', '1', 'c', '', 'c', "http://127.0.0.1:$Port/scrap-mechanic", 'k', 's', 'y', 'q')
+    $hostConfig = Get-Content "$root\H\app\sm-sync.config.json" -Raw | ConvertFrom-Json
+    Check 'setup: a host is walked through all five steps' ((Has $o 'SETUP 1 OF 5') -and (Has $o 'SETUP 4 OF 5') -and (Has $o 'The storage accepted the keys') -and (Has $o 'SETUP 5 OF 5'))
+    Check 'setup: writes the settings file' (($hostConfig.SaveName -eq $wizWorld) -and ($hostConfig.Bucket -eq 'scrap-mechanic') -and ($hostConfig.Endpoint -eq "http://127.0.0.1:$Port"))
+    Check 'setup: uploads the world as the starting point' ((Has $o 'uploaded and available') -and ((Keys) -match 'Wizard_World/v000001'))
+    $code = [regex]::Match(($o -replace '\s', ''), 'SMSYNC1:[A-Za-z0-9_-]+:[0-9a-f]{6}').Value
+    Check 'setup: ends with an invite code' ($code.Length -gt 40)
+    Check 'the menu shows the invite again' (Has (Run H '-NoUpdate' @('f', 'q')) 'Anyone who has this code')
+
+    # A friend joins with that code, wrapped the way a chat app would wrap it.
+    $env:SMSYNC_SAVE_ROOT = "$root\G\saves"
+    $o = Run G '-NoUpdate' @('1', 'SMSYNC1:AAAA:000000', '', 'q')
+    Check 'setup: a wrong invite code is refused' ((Has $o 'not a complete invite code') -and -not (Test-Path "$root\G\app\sm-sync.config.json"))
+    $o = Run G '-NoUpdate' @('1', ("here you go " + $code.Substring(0, 30) + ' ' + $code.Substring(30)), 'q')
+    Check 'setup: a friend joins with the invite code' ((Has $o "The shared world is '$wizWorld'") -and (Has $o 'The settings are saved'))
+    $o = Run G '-Action', 'play', '-NoLaunch'
+    Check 'setup: the friend gets the host''s world' ((Has $o 'now checked out to you') -and ((Get-FileHash "$root\G\saves\User_76561190000000002\Save\Survival\$wizWorld.db").Hash -eq (Get-FileHash $wizSave).Hash))
+    Remove-Item Env:SMSYNC_SAVE_ROOT
+
     $o = Run A '-Action', 'update'
     $app = "$root\A\app"
     Check 'self-update installs the newer tag' ((Has $o 'v9.9.9') -and ((Get-Content "$app\sm-sync.ps1" -Raw) -match "Version        = '9\.9\.9'"))
@@ -195,6 +235,7 @@ try {
     $o = Run B @() @('q')
     Check 'menu launch updates, relaunches and shows what is new' ((Has $o 'WHAT IS NEW') -and (Has $o 'Test change line') -and (Has $o 'v9.9.9'))
     Check 'what is new stops at the version already installed' (-not (Has $o 'Leave a message about your save'))
+    Check 'a rejected update key is dropped, not fatal' (Has (Get-Content "$root\B\home\sm-sync.log" -Raw) 'the update key was rejected, carrying on without it')
 
     Stop-Process -Id $server.Id -Force
     $o = Run B '-Action', 'status'
@@ -202,7 +243,7 @@ try {
 }
 finally {
     if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force }
-    Remove-Item Env:SMSYNC_HOME, Env:SMSYNC_PLAYER, Env:SMSYNC_GAME_PROCESS, Env:SMSYNC_NO_TOAST, Env:SMSYNC_WAIT_SECONDS, Env:SMSYNC_NO_CLIPBOARD, Env:SMSYNC_NO_LAUNCH, Env:SMSYNC_STEAM_ID, Env:SMSYNC_GAME_BUILD, Env:SMSYNC_TEST_CHECKOUT_DELAY -ErrorAction SilentlyContinue
+    Remove-Item Env:SMSYNC_HOME, Env:SMSYNC_PLAYER, Env:SMSYNC_GAME_PROCESS, Env:SMSYNC_NO_TOAST, Env:SMSYNC_WAIT_SECONDS, Env:SMSYNC_NO_CLIPBOARD, Env:SMSYNC_NO_LAUNCH, Env:SMSYNC_STEAM_ID, Env:SMSYNC_GAME_BUILD, Env:SMSYNC_TEST_CHECKOUT_DELAY, Env:SMSYNC_SAVE_ROOT, Env:SMSYNC_REPORT_FILE -ErrorAction SilentlyContinue
 }
 Write-Host ''
 if ($failures) { Write-Host "$failures of $checks checks FAILED. Re-run with -ShowAll to see the output." -ForegroundColor Red; exit 1 }

@@ -2,6 +2,13 @@ What changed in each version of Scrap Mechanic Sync. Newest first.
 The tool shows the entries you have not seen yet after it updates itself.
 Format: a version number alone on a line, then one "- " line per change.
 
+0.3.0
+- The tool is now open source. Updates no longer need a key.
+- New: a setup that runs the first time. It takes an invite code from a friend, or walks you through creating the online storage for a new shared world.
+- New: press F to invite a friend. It copies a message with the download link and an invite code. Send it privately.
+- New: press I to report a fault. It opens a new issue on GitHub with the diagnostics filled in, and shows you the report first.
+- Diagnostics no longer contain names, keys, Steam IDs or your Windows user name.
+
 0.2.6
 - The Play and Join screens now say what to do if Steam asks to "Launch Game with custom arguments": click Continue.
 
