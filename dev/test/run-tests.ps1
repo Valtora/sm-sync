@@ -22,6 +22,8 @@ $env:SMSYNC_GAME_PROCESS = 'NoSuchGame_smtest'
 $env:SMSYNC_NO_TOAST = '1'
 $env:SMSYNC_WAIT_SECONDS = '1'
 $env:SMSYNC_NO_CLIPBOARD = '1'
+$env:SMSYNC_NO_LAUNCH = '1'
+$env:SMSYNC_STEAM_ID = '76561190000000001'
 
 function Run([string]$Player, [string[]]$Arguments, $Stdin) {
     $shell = if ($Player -eq 'A') { 'powershell.exe' } else { 'pwsh.exe' }
@@ -174,10 +176,15 @@ try {
     Check 'simultaneous check-out: the first writer wins' (Has $o 'now checked out to you')
     Check 'simultaneous check-out: the second is refused' (Has (Get-Content "$root\slow.txt" -Raw) 'a moment before you')
     Check 'simultaneous check-out: the state names the winner' (Has (Run A '-Action', 'status') 'checked out by B')
+    # While B has the world, A is told B is probably playing and offered to join as a guest.
+    $o = Run A '-NoUpdate' @('j', 'q')
+    Check 'the other player is offered to join' ((Has $o 'is probably playing right now') -and (Has $o 'Join B in their game'))
+    Check 'joining connects to the holder by Steam ID' (Has $o 'Steam ID 76561190000000001')
+    Check 'joining starts no check-out' ((Has $o 'WITHOUT checking the world out') -and (Has (Run A '-Action', 'status') 'checked out by B'))
     [void](Run B '-Action', 'finish')
 
     $o = Run A '-NoUpdate' @('h', 'r', '3', '', 'a', 'd', 'w', 'q')
-    Check 'menu, help and restore list render on 5.1' ((Has $o 'PLAYING TOGETHER') -and (Has $o 'Pick the copy to bring back') -and (Has $o 'by Valtorra'))
+    Check 'menu, help and restore list render on 5.1' ((Has $o 'PLAYING TOGETHER') -and (Has $o 'Pick the copy to bring back') -and (Has $o 'by Valtora'))
     Check 'activity screen lists sessions' ((Has $o 'The last sessions') -and (Has $o 'Fuel is in the red chest'))
     Check 'diagnostics screen runs the checks' (Has $o 'honours conditional writes')
 
@@ -195,7 +202,7 @@ try {
 }
 finally {
     if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force }
-    Remove-Item Env:SMSYNC_HOME, Env:SMSYNC_PLAYER, Env:SMSYNC_GAME_PROCESS, Env:SMSYNC_NO_TOAST, Env:SMSYNC_WAIT_SECONDS, Env:SMSYNC_NO_CLIPBOARD, Env:SMSYNC_GAME_BUILD, Env:SMSYNC_TEST_CHECKOUT_DELAY -ErrorAction SilentlyContinue
+    Remove-Item Env:SMSYNC_HOME, Env:SMSYNC_PLAYER, Env:SMSYNC_GAME_PROCESS, Env:SMSYNC_NO_TOAST, Env:SMSYNC_WAIT_SECONDS, Env:SMSYNC_NO_CLIPBOARD, Env:SMSYNC_NO_LAUNCH, Env:SMSYNC_STEAM_ID, Env:SMSYNC_GAME_BUILD, Env:SMSYNC_TEST_CHECKOUT_DELAY -ErrorAction SilentlyContinue
 }
 Write-Host ''
 if ($failures) { Write-Host "$failures of $checks checks FAILED. Re-run with -ShowAll to see the output." -ForegroundColor Red; exit 1 }

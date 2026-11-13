@@ -33,16 +33,19 @@ the window open. Windows shows a notification when the world is available.
 
 PLAYING TOGETHER AT THE SAME TIME
 
-Only ONE of you uses this tool: that person presses 1 and hosts. The other starts Scrap
-Mechanic from Steam as normal and joins through the friends list.
+One of you presses 1 and hosts. The other opens the tool, sees CHECKED OUT BY the host,
+and presses J. The game starts and joins the host by itself. The host must already be
+inside the world. If you land on the main menu instead, press Shift+Tab in the game, find
+your friend in the list and choose Join Game.
 
 
 IF SOMETHING LOOKS WRONG
 
 "CHECKED OUT BY <name>"
-   Your friend has the newest copy of the world and has not uploaded it yet. They are
-   playing, or forgot to finish. Message them. Do not play until it says AVAILABLE,
-   or your progress will be lost.
+   Your friend has the newest copy of the world and has not uploaded it yet.
+   If they are playing right now, press J to join their game.
+   If you want to play on your own, wait until it says AVAILABLE. Do not load the
+   world yourself before then, or your progress will be lost.
 
 Steam asks about a "Cloud conflict"
    Choose the LOCAL files.

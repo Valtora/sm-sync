@@ -29,7 +29,7 @@ $ErrorActionPreference = 'Stop'
 
 # Bump Version for every release and tag the commit v<Version>.
 # Bump MinPeerVersion only when older copies must not touch the shared state any more.
-$script:Version        = '0.2.4'
+$script:Version        = '0.2.5'
 $script:MinPeerVersion = '0.2.0'
 
 $script:SteamAppId   = '387990'
@@ -200,7 +200,7 @@ function Show-Banner([switch]$Small) {
     else { Say '  SCRAP MECHANIC' 'Orange' }
     $world = '?'; if ($script:Config) { $world = $script:Config.SaveName }
     Say ''
-    Write-Seg @('  S A V E   S Y N C', 'Amber', '     world ', 'Dim', $world, 'Text', '     v', 'Dim', $script:Version, 'Dim', '     by ', 'Dim', 'Valtorra', 'Orange')
+    Write-Seg @('  S A V E   S Y N C', 'Amber', '     world ', 'Dim', $world, 'Text', '     v', 'Dim', $script:Version, 'Dim', '     by ', 'Dim', 'Valtora', 'Orange')
     Say ''
 }
 
@@ -662,6 +662,7 @@ function Read-State {
     }
     return @{
         sessions   = $sessions
+        holderSteamId = [string]$o.holderSteamId
         holder     = [string]$o.holder
         heldSince  = ConvertTo-IsoString $o.heldSince
         version    = [int]$o.version
@@ -683,6 +684,9 @@ function Write-State([hashtable]$State) {
             [ordered]@{ version = $_.version; sha256 = $_.sha256; size = $_.size; by = $_.by; at = $_.at
                 gz = [bool]$_.gz; stored = [long]$_.stored; note = [string]$_.note; build = [string]$_.build } })
     }
+    # The holder's Steam ID lets the other player's game connect straight to them.
+    $doc.holderSteamId = ''
+    if ($State.holder) { $doc.holderSteamId = [string]$State.holderSteamId }
     # The activity log. Copies older than 0.2.4 do not know it and drop it when they write.
     $doc.sessions = @($State.sessions | Where-Object { $_ } | ForEach-Object {
         [ordered]@{ by = $_.by; at = $_.at; minutes = [int]$_.minutes; version = [int]$_.version; note = [string]$_.note } })
@@ -966,6 +970,7 @@ function Get-OrSeedState {
 function Set-Holder([hashtable]$State) {
     $State.holder = $script:Player
     $State.heldSince = [DateTime]::UtcNow.ToString('o')
+    $State.holderSteamId = Get-MySteamId
     if ($env:SMSYNC_TEST_CHECKOUT_DELAY) { Start-Sleep -Seconds ([int]$env:SMSYNC_TEST_CHECKOUT_DELAY) }   # tests only: lets a second player get in first
     Write-State $State
     Write-Log 'checked the world out'
@@ -986,7 +991,7 @@ function Enter-Turn([switch]$Override) {
     if ($state.holder) {
         if (-not $Override) {
             Say-Bad ("{0} has the world checked out (since {1}, {2})." -f $state.holder, (Format-When $state.heldSince), (Format-Ago $state.heldSince))
-            Say-Wrapped '      ' 'Text' 'They have the newest copy and have not uploaded it yet. Wait until they finish. If they forgot and cannot do it now, use "Force check-out" in the menu.' 'Dim'
+            Say-Wrapped '      ' 'Text' 'They have the newest copy and have not uploaded it yet. If they are playing right now, you can join their game through Steam (J in the menu). Otherwise wait until they finish. If they forgot and cannot do it now, use "Force check-out" in the menu.' 'Dim'
             return $false
         }
         Say-Warn ("Forcing the check-out away from {0}. Anything they played since {1} is now out of sync." -f $state.holder, (Format-When (Get-Current $state).at))
@@ -1072,23 +1077,35 @@ function Exit-TurnCore([switch]$Override) {
     Add-SessionNote
 }
 
-function Start-Game {
-    # Starts the game through Steam with "-open <save>", which loads the shared world and
-    # skips the main menu. Set "OpenWorldDirectly": false in the settings file to go back
-    # to a plain launch if a game update ever breaks that option.
-    $direct = $true
-    if ($null -ne $script:Config.OpenWorldDirectly) { $direct = [bool]$script:Config.OpenWorldDirectly }
+function Get-MySteamId {
+    # The save folder is ...\User\User_<SteamId64>\Save\Survival, so the ID needs no Steam API.
+    if ($env:SMSYNC_STEAM_ID) { return $env:SMSYNC_STEAM_ID }
+    $m = [regex]::Match([string]$script:SavePath, 'User_(\d{17})\\')
+    if ($m.Success) { return $m.Groups[1].Value }
+    return ''
+}
+
+function Start-GameWith([string[]]$GameArguments) {
+    # Starts the game through steam.exe with launch options. Returns $false when Steam
+    # cannot be found, and the caller falls back to a plain launch.
     $steamExe = $null
     try { $steamExe = (Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -ErrorAction Stop).SteamExe } catch { }
-    if ($direct -and $steamExe -and (Test-Path -LiteralPath $steamExe)) {
-        Write-Log "launching through steam.exe with -open $script:SavePath"
-        Start-Process -FilePath $steamExe -ArgumentList @('-applaunch', $script:SteamAppId, '-open', ('"{0}"' -f $script:SavePath))
-        return
-    }
+    if (-not $steamExe -or -not (Test-Path -LiteralPath $steamExe)) { return $false }
+    Write-Log ("launching through steam.exe: " + ($GameArguments -join ' '))
+    Start-Process -FilePath $steamExe -ArgumentList (@('-applaunch', $script:SteamAppId) + $GameArguments)
+    return $true
+}
+
+function Start-Game {
+    # Starts the game with "-open <save>", which loads the shared world and skips the main
+    # menu. Set "OpenWorldDirectly": false in the settings file to go back to a plain
+    # launch if a game update ever breaks that option.
+    $direct = $true
+    if ($null -ne $script:Config.OpenWorldDirectly) { $direct = [bool]$script:Config.OpenWorldDirectly }
+    if ($direct -and (Start-GameWith @('-open', ('"{0}"' -f $script:SavePath)))) { return }
     Write-Log 'launching through the steam:// link (main menu)'
     Start-Process "steam://rungameid/$script:SteamAppId"
 }
-
 function Start-PlaySession {
     if (-not (Enter-Turn -Override:$Force)) { return }
     if ($NoLaunch -or $env:SMSYNC_NO_LAUNCH) { return }
@@ -1167,7 +1184,13 @@ function Get-StatusRows($Model) {
         }
         elseif ($s.holder) {
             $rows += , @('World     ', 'Dim', ("CHECKED OUT BY {0}" -f $s.holder.ToUpperInvariant()), 'Bad', ("   since {0} ({1})" -f (Format-When $s.heldSince), (Format-Ago $s.heldSince)), 'Dim')
-            $hint = "$($s.holder) has the newest copy and has not uploaded it yet. Wait for them to finish. Do not play until this says AVAILABLE."; $hintColor = 'Bad'
+            if (Test-HolderRecent $s) {
+                $hint = "$($s.holder) is probably playing right now. To play together, press J: the game starts and joins $($s.holder). To play on your own, wait until this says AVAILABLE."
+            }
+            else {
+                $hint = "$($s.holder) has had the world for a long time and may have forgotten to finish. Message them. Do not play on your own until this says AVAILABLE."
+            }
+            $hintColor = 'Amber'
         }
         else {
             $rows += , @('World     ', 'Dim', 'AVAILABLE', 'Good', '   nobody has it checked out', 'Dim')
@@ -1286,11 +1309,12 @@ function Show-Help {
             '[4] FORCE CHECK-OUT: only when your friend forgot to finish and cannot do it. You get the last uploaded world. Whatever they played since then is out of sync and will not be in the shared world.',
             '[W] WAIT FOR WORLD TO BE UPLOADED: when your friend has it, leave this open. A Windows notification tells you the moment the world is available.',
             '[S] DESKTOP SHORTCUT: puts a shortcut to this tool on your desktop. Always start the game from it, not from Steam.',
+            '[J] JOIN YOUR FRIEND: shown while your friend has the world. Starts the game and connects you to them as a guest. Nothing is checked out or uploaded by you.',
             '[A] ACTIVITY: who played when, for how long, and the message they left.',
             '[D] DIAGNOSTICS: checks that everything is set up correctly and copies a report you can paste to whoever set this up.')),
         @('PLAYING TOGETHER AT THE SAME TIME', @(
             'When you are both online you can still play together the normal way.',
-            'ONE of you presses 1 here and hosts the world. The other does NOT use this tool at all: they open Scrap Mechanic from Steam and join the host through the friends list.',
+            'ONE of you presses 1 here and hosts the world. The other opens this tool, sees CHECKED OUT BY the host, and presses J. That starts the game without checking anything out and connects it to the host, who must already be inside the world.',
             'Only the host has the world checked out, and only the host uploads at the end. The guest never needs to check anything out.',
             'Next time, either of you can be the one who presses 1.')),
         @('IF SOMETHING GOES WRONG', @(
@@ -1682,6 +1706,42 @@ function Invoke-Screen([string]$Title, [scriptblock]$Body) {
     Wait-Key
 }
 
+function Test-HolderRecent($State) {
+    # True when the world was checked out within the last 12 hours, so its holder is
+    # probably still playing and can be joined, not someone who forgot to finish.
+    if (-not $State -or -not $State.holder -or -not $State.heldSince) { return $false }
+    return (([DateTime]::UtcNow - (ConvertFrom-Iso $State.heldSince)).TotalHours -lt 12)
+}
+
+function Join-FriendGame {
+    # Starts the game without a check-out and connects it to the holder's session.
+    $state = Read-State
+    $name = 'your friend'; $steamId = ''
+    if ($state -and $state.holder -and $state.holder -ne $script:Player) { $name = $state.holder; $steamId = [string]$state.holderSteamId }
+    $direct = $steamId -match '^\d{17}$'
+    Say-Wrapped '  ' 'Text' "This starts Scrap Mechanic WITHOUT checking the world out. You play as a guest inside $name's game, and only $name uploads at the end."
+    Say ''
+    if ($direct) {
+        Say-Wrapped '  ' 'Text' "The game will connect to $name by itself. $name must already be inside the world for that to work."
+        Say ''
+        Say '  If you end up at the main menu instead:' 'Amber'
+    }
+    else { Say '  When the game is open:' 'Amber' }
+    Say-Wrapped '    1.  ' 'Orange' 'Press Shift+Tab to open the Steam overlay, or open your Steam friends list.'
+    Say-Wrapped '    2.  ' 'Orange' "Find $name, click the arrow beside their name and choose Join Game."
+    Say ''
+    Say-Wrapped '  ' 'Text' "Do not load the shared world yourself from the game's own menu. Right now only $name's copy is the real one." 'Dim'
+    # The status box would otherwise warn about a game running without a check-out.
+    $script:WarnedOutside = $true
+    if (Test-GameRunning) { Say-Step 'Scrap Mechanic is already running. Join through the Steam friends list.'; return }
+    if ($env:SMSYNC_NO_LAUNCH) { if ($direct) { Say-Step "Connecting to $name (Steam ID $steamId) ..." }; return }
+    Say-Step "Starting Scrap Mechanic and connecting to $name ..."
+    # Both options together, as the game's own documentation shows: the first joins a
+    # session they host, the second a session they are in.
+    if ($direct -and (Start-GameWith @('-connect_steam_id', $steamId, '-friend_steam_id', $steamId))) { return }
+    Write-Log "launching as a guest of $name without a direct connection"
+    Start-Process "steam://rungameid/$script:SteamAppId"
+}
 function Get-MenuItems($Model) {
     # The rows of the main menu for the current status. A row with a Why cannot be chosen.
     $other = ''
@@ -1695,6 +1755,7 @@ function Get-MenuItems($Model) {
         @{ Key = '3'; Label = 'Restore a backup'; Desc = 'bring back an older copy of the world'; Why = $why }
     )
     if ($other) {
+        $items += @{ Key = 'J'; Label = "Join $other in their game"; Desc = 'start the game and connect to them as a guest'; Why = '' }
         $items += @{ Key = 'W'; Label = 'Wait for world to be uploaded'; Desc = "notify me when $other has finished"; Why = '' }
         $items += @{ Key = '4'; Label = 'Force check-out'; Desc = 'if they forgot to finish (their progress goes out of sync)'; Why = '' }
     }
@@ -1804,7 +1865,9 @@ function Show-Menu {
         # Start on the row most likely wanted: Wait when a friend has the world, else the first usable one.
         $selected = -1
         for ($i = 0; $i -lt $items.Count; $i++) { if (-not $items[$i].Why) { $selected = $i; break } }
-        for ($i = 0; $i -lt $items.Count; $i++) { if ($items[$i].Key -eq 'W') { $selected = $i } }
+        $preferred = 'W'
+        if ($model.State -and (Test-HolderRecent $model.State)) { $preferred = 'J' }
+        for ($i = 0; $i -lt $items.Count; $i++) { if ($items[$i].Key -eq $preferred) { $selected = $i } }
         if ($script:Fancy) { Write-Host "$($script:E)[?25l" -NoNewline }
         Write-MenuBlock $items $selected
         try { $choice = Read-MenuChoice $items $selected (Get-ModelSignature $model) }
@@ -1823,6 +1886,7 @@ function Show-Menu {
             }
             'W' { Invoke-Screen 'Wait for world to be uploaded' { Wait-ForAvailable } }
             'S' { Invoke-Screen 'Desktop shortcut' { $made = New-DesktopShortcut; Say-Good 'The shortcut is on your desktop.'; Say "      $made" 'Dim' } }
+            'J' { Invoke-Screen 'Join your friend' { Join-FriendGame } }
             'A' { Invoke-Screen 'Activity' { Show-Activity } }
             'D' { Invoke-Screen 'Diagnostics' { Show-Diagnostics } }
             'H' { Show-Help }

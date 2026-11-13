@@ -2,6 +2,9 @@ What changed in each version of Scrap Mechanic Sync. Newest first.
 The tool shows the entries you have not seen yet after it updates itself.
 Format: a version number alone on a line, then one "- " line per change.
 
+0.2.5
+- When your friend has the world and is probably playing, the tool says so. Press J and the game starts and joins them, with no need to find them in Steam.
+
 0.2.4
 - The tool stops and asks before uploading a world that is much smaller than the shared one, in case a new world was made with the same name.
 - It warns you when your friend's save was made with a newer version of the game than yours.

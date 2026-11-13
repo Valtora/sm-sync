@@ -83,8 +83,11 @@ while the other player has the world. The status box re-checks itself every 30 s
 
 ### Playing at the same time
 
-One player presses **1** and hosts. The other does not use the tool: they start the game
-from Steam and join through the friends list. Only the host checks out and uploads.
+One player presses **1** and hosts. The other sees `CHECKED OUT BY <host>` with a hint that
+the host is probably playing (the check-out is under 12 hours old), and presses **J**. That
+starts the game with no check-out and with `-connect_steam_id <id> -friend_steam_id <id>`, so
+it joins the host directly. The host's Steam ID is read from their save folder name at
+check-out and kept in the state file. Only the host checks out and uploads.
 
 ## How the save is protected
 
