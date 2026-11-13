@@ -1,4 +1,4 @@
-# Scrap Mechanic Sync
+<h1 align="center"><img src="docs/title.svg" alt="Scrap Mechanic Sync" width="560"></h1>
 
 Share Scrap Mechanic worlds with friends, with no dedicated server and no sending save
 files to each other. Survival, Creative and Custom games all work.

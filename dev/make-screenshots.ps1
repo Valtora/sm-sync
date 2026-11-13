@@ -60,6 +60,20 @@ function Shot([string]$App, [string]$Player, [string]$Extra, [string]$Keys, [str
     $hdc = $g.GetHdc()
     [void][Win]::PrintWindow($h, $hdc, 2)
     $g.ReleaseHdc($hdc); $g.Dispose()
+    # Cut the empty rows below the last line of text, keeping a margin of about one line.
+    # The width stays, so the window's title bar keeps its buttons.
+    $bg = $bmp.GetPixel([int]($bmp.Width / 2), $bmp.Height - 20)
+    $last = 0
+    for ($y = $bmp.Height - 12; $y -gt 60 -and -not $last; $y--) {
+        for ($x = 20; $x -lt $bmp.Width - 20; $x += 3) {
+            $p = $bmp.GetPixel($x, $y)
+            if ([Math]::Abs($p.R - $bg.R) + [Math]::Abs($p.G - $bg.G) + [Math]::Abs($p.B - $bg.B) -gt 60) { $last = $y; break }
+        }
+    }
+    if ($last -and ($last + 34) -lt $bmp.Height) {
+        $crop = $bmp.Clone((New-Object System.Drawing.Rectangle 0, 0, $bmp.Width, ($last + 34)), $bmp.PixelFormat)
+        $bmp.Dispose(); $bmp = $crop
+    }
     $bmp.Save((Join-Path $OutDir "$File.png"), [System.Drawing.Imaging.ImageFormat]::Png)
     "{0}.png  {1}x{2}" -f $File, $bmp.Width, $bmp.Height
     $bmp.Dispose()
