@@ -1,3 +1,5 @@
+<img width="1037" height="831" alt="sm-sync" src="https://github.com/user-attachments/assets/e270a85c-35d9-41b3-98fb-5bce79c77d64" />
+
 # Scrap Mechanic Sync
 
 Share one Scrap Mechanic Survival world between friends without a dedicated server and
