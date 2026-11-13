@@ -17,8 +17,13 @@ Nothing is sent to the author. The storage belongs to the person who set it up.
 
 **An invite code is a key.** Anyone who has it can download, replace or delete the shared
 world. Send it in a private message, never in a public channel or a screenshot. If one
-leaks, delete the API token in Cloudflare, create a new one, run the setup again and send
-new invites.
+leaks, delete the API token in Cloudflare, create a new one, add the world again with the
+new keys and send new invites. The same goes for an `Invite - <world>.txt` file saved
+from the invite screen.
+
+**Deleting a world for everyone is limited by the tool, not by the storage.** The tool
+offers it only to the player who first uploaded the world. Every invited player still
+holds keys that can delete files, so someone technical could do it without the tool.
 
 **The settings file holds the same keys.** `sm-sync.config.json`, next to the tool, should
 never be posted or shared.

@@ -1,7 +1,7 @@
 # Scrap Mechanic Sync
 
-Share one Scrap Mechanic Survival world with friends, with no dedicated server and no
-sending save files to each other.
+Share Scrap Mechanic worlds with friends, with no dedicated server and no sending save
+files to each other. Survival, Creative and Custom games all work.
 
 ![The Scrap Mechanic Sync main menu, showing the world status and the options](docs/menu.png)
 
@@ -13,6 +13,8 @@ it, and when they quit the tool uploads their progress for the next player.
 
 - **Two copies never go out of sync.** Only the player who has the world can play and upload.
 - **Play together too.** If a friend already has the world, one key joins their game.
+- **Mods are checked.** A world made with Workshop mods tells each friend which ones to
+  subscribe to before they can play it.
 - **Backups at every step.** The last 5 uploads and the last 10 local copies can be restored.
 - **Nothing to install.** One PowerShell script with a text menu. It updates itself.
 
@@ -39,7 +41,7 @@ An invite code is the key to your world, so send it privately.
 | | |
 | --- | --- |
 | [Setup guide](docs/SETUP.md) | Every setup step for hosts and friends, and what to do when the connection test fails |
-| [Everyday use](docs/USAGE.md) | The menu, playing at the same time, backups and troubleshooting |
+| [Everyday use](docs/USAGE.md) | The menu, playing at the same time, mods, backups and troubleshooting |
 | [Safety and privacy](docs/SAFETY.md) | What the tool does on your PC, automatic updates, and what a report contains |
 | [Development notes](docs/DEVELOPMENT.md) | Storage layout, tests and releases |
 
@@ -52,11 +54,6 @@ Scrap Mechanic Sync is an unofficial, fan-made tool. It is not affiliated with, 
 by or supported by Axolot Games, the developer and publisher of Scrap Mechanic. Scrap
 Mechanic is a trademark of its owner. Use the tool at your own risk and keep your own
 backups of worlds you care about.
-
-## Credits
-
-Inspired by [u/Gloryboy811](https://www.reddit.com/user/Gloryboy811) on Reddit, who
-described a similar tool of their own.
 
 ---
 

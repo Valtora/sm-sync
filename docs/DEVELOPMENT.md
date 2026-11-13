@@ -12,6 +12,7 @@
 | `FRIEND-INSTRUCTIONS.txt` | Everyday guide for players. |
 | `dev\make-release-zip.ps1` | Builds the zip attached to a GitHub release. |
 | `dev\simulate-friend.ps1` | Runs a release zip as a second player on this PC. |
+| `dev\make-screenshots.ps1` | Retakes the screenshots in `docs\` from a demo copy with made-up data. |
 | `dev\test\run-tests.ps1` | End-to-end tests against a local stand-in for the storage and for GitHub. |
 
 ## How the save is protected
@@ -36,18 +37,67 @@
 ## Storage layout
 
 ```
-<SaveName>/state.json       holder, heldSince, holderSteamId, version, minVersion, history[5], sessions[20]
+<SaveName>/state.json       type, owner, ownerSteamId, holder, heldSince, holderSteamId, version, minVersion, history[5], sessions[20]
 <SaveName>/v000007.db.gz    one gzip object per version, oldest pruned beyond 5
 ```
 
-Each history entry holds `version, sha256, size, by, at, gz, stored, note, build`. The hash
-is of the uncompressed save. Requests are signed with AWS Signature V4, implemented in the
+Each history entry holds `version, sha256, size, by, at, gz, stored, note, build, mods`.
+The hash is of the uncompressed save. `type` is `Survival`, `Creative` or `Custom`, set by
+the first upload. Requests are signed with AWS Signature V4, implemented in the
 script. `-Action selftest` checks the signing against Amazon's published examples.
+
+`owner` is the player who uploaded version 1. Only that player is offered "Delete for
+everyone". A world uploaded before 0.4.0 has no owner, and any player may delete it.
+
+Deleting a world replaces `state.json` with a marker (`deleted`, `deletedBy`, `deletedAt`,
+`minVersion` 0.4.0), written with `If-Match` so a check-out made a moment earlier wins.
+The version objects are deleted afterwards. Every other copy reads the marker and tells
+its player. A host who later shares a world of the same name clears the marker.
+
+## Settings file
+
+```
+{ "Worlds": [ { Endpoint, Bucket, AccessKeyId, SecretAccessKey, SaveName, Type?, SaveFolder? } ],
+  "LastWorld": "<SaveName>", "AutoUpdate"?, "BackupsToKeep"?, "OpenWorldDirectly"? }
+```
+
+A file from before 0.4.0 held one world at the top level. `Read-Settings` converts it on
+first run and moves that world's backups into `backups\<SaveName>`. The rest of the script
+reads `$script:Config`, the top-level settings merged with the selected world, so it does
+not know about the list. Worlds are identified by save name, which must be unique on a PC
+because it is also the file name in the game.
+
+## World types
+
+The game keeps each type in its own folder under `User\User_<SteamId64>\Save`:
+
+| Type | Folder |
+| --- | --- |
+| Survival | `Save\Survival` |
+| Creative | `Save` itself |
+| Custom | `Save\Custom` |
+
+A world entry without `Type` is Survival, as every world was before 0.4.0. Without
+`SaveFolder` the tool finds the account's `Save` folder (remembered in `savebase.txt`) and
+adds the type's folder. `-open <save file>` loads all three types directly.
+
+## Mods
+
+A world's Game table has a `mods` column: a 4-byte big-endian count, then 24 bytes per
+mod, an 8-byte Workshop ID (0 for a local mod) followed by 16 bytes the tool ignores.
+`Get-WorldModIds` reads it at upload with `winsqlite3.dll`, the SQLite library that ships
+with Windows, opened read-only. Names come from `description.json` in the Workshop folder.
+A read failure records no mods and never stops an upload.
+
+Before a check-out, every Workshop ID in the current version must have a folder under
+`steamapps\workshop\content\387990` in one of the Steam libraries. `dev\test\make_world.py`
+writes a world file with a given mods list for the tests.
 
 ## Invite codes
 
 `SMSYNC1:<base64url>:<check>`. The middle part is the endpoint, bucket, access key ID,
-secret access key and save name joined by newlines. The check is the first 6 hex digits of
+secret access key, save name and world type joined by newlines. A code without the type
+is a Survival world. The check is the first 6 hex digits of
 the SHA-256 of those bytes, which catches a code cut short by a chat app. The code is not
 encrypted. It is the keys in another form.
 
@@ -73,14 +123,16 @@ dev\test\run-tests.ps1 -ShowAll
 
 Players on Windows PowerShell 5.1 and PowerShell 7 run through check-out, refusal, upload,
 download, notes, history pruning, restore, the background helper, forced check-out, the
-failure cases, the first-run setup as host and as friend, the redacted report and a
-self-update. Needs python for the fake server. Nothing touches a real bucket, a real save
+failure cases, the first-run setup as host and as friend with refused entries and Esc, a
+second world, the Worlds screen, deleting a world, the redacted report and a self-update. Needs python for the fake server. Nothing touches a real bucket, a real save
 or the game.
 
 Environment variables used by the tests: `SMSYNC_HOME`, `SMSYNC_PLAYER`,
 `SMSYNC_SAVE_ROOT`, `SMSYNC_GAME_PROCESS`, `SMSYNC_GAME_BUILD`, `SMSYNC_STEAM_ID`,
 `SMSYNC_NO_TOAST`, `SMSYNC_NO_CLIPBOARD`, `SMSYNC_NO_LAUNCH`, `SMSYNC_WAIT_SECONDS`,
 `SMSYNC_REPORT_FILE`, `SMSYNC_TEST_CHECKOUT_DELAY`, `SMSYNC_FORCE_FANCY`, `SMSYNC_HEIGHT`.
+`SMSYNC_KEYS` is a comma-separated list of answers used up before the keyboard is read,
+which is how the screenshot script reaches a given screen.
 
 ## Releasing
 
@@ -111,6 +163,7 @@ address. One copy makes 4 an hour while its menu is open.
 
 ## Command line
 
-`sm-sync.ps1 -Action status|play|finish|take|wait|doctor|update|selftest|setup` run
-without the menu. `-Plain` turns colours off, `-NoUpdate` skips update checks, `-Yes`
+`sm-sync.ps1 -Action status|play|finish|take|wait|doctor|update|selftest` run without the
+menu, on the world used last or the one named with `-World "<save name>"`. `-Action setup`
+adds a world. `-Plain` turns colours off, `-NoUpdate` skips update checks, `-Yes`
 answers yes to confirmations. The log is `%LOCALAPPDATA%\SMSync\sm-sync.log`.

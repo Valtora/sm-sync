@@ -8,24 +8,28 @@ with SMSYNC1. Keep that message private: the code is the key to your shared worl
 1. Download the zip from the link in the message. Right-click it, choose "Extract All",
    and extract it somewhere you will find it again, for example your Documents folder.
    Keep all the files together.
-2. Go back to your friend's message and copy the whole of it.
+2. Go back to your friend's message and copy the whole of it (select it, Ctrl+C).
 3. Open the extracted folder and double-click "Scrap Mechanic Sync".
    If Windows shows a blue "Windows protected your PC" box, click "More info" and then
    "Run anyway". If it shows "Open File - Security Warning", click "Run".
 4. A black and orange window opens. Press 1 for "I have an invite code". It reads the
    code from what you copied. If it asks for the code, paste with Ctrl+V and press Enter.
+   If the message lists mods from the Steam Workshop, open each link, press Subscribe,
+   and let Steam download it before you play.
 5. It asks for your name. Type it and press Enter. Use a different name from your friend.
-6. It asks whether to put a shortcut on your desktop. Press Y.
+6. It asks whether to put a "Scrap Mechanic - Sync" shortcut on your desktop. Press Y.
    From now on, ALWAYS start the game with that shortcut, never from Steam.
 
 If you are the one starting a shared world for your group, press 2 on that first screen
 instead and follow the steps it shows. Afterwards press F to invite your friends.
 
+Esc always goes back a step, so you cannot get stuck on a setup screen.
+
 
 EVERY TIME YOU WANT TO PLAY
 
 1. Make sure Scrap Mechanic is closed.
-2. Double-click the "Scrap Mechanic (shared world)" shortcut on your desktop.
+2. Double-click the "Scrap Mechanic - Sync" shortcut on your desktop.
 3. Look at the box at the top. The "World" line says who has the world.
 4. If it says AVAILABLE (or CHECKED OUT BY YOU), press 1.
 5. The game starts by itself. LEAVE THE WINDOW OPEN while you play.
@@ -39,6 +43,9 @@ EVERY TIME YOU WANT TO PLAY
 
 If your friend has the world and you want to know when they are done, press W and leave
 the window open. Windows shows a notification when the world is available.
+
+If you share more than one world, the tool starts on a list of them. Press the number
+of the world you want. Press M in the menu to get back to that list.
 
 PLAYING TOGETHER AT THE SAME TIME
 
