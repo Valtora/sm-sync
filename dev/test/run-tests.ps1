@@ -97,7 +97,9 @@ try {
     Check 'download, check, check-out' ((Has $o 'Downloaded and checked') -and (Has $o 'now checked out to you'))
     Check 'note shown to the next player' (Has $o 'Fuel is in the red chest')
     Check 'both PCs hold the same world' ((SaveHash A) -eq (SaveHash B))
-    Check 'previous save was backed up first' (@(Get-ChildItem "$root\B\home\backups").Count -eq 1)
+    Check 'previous save was backed up first, in a folder for that world' (@(Get-ChildItem "$root\B\home\backups\My_World" -File).Count -eq 1)
+    $converted = Get-Content "$root\B\app\sm-sync.config.json" -Raw | ConvertFrom-Json
+    Check 'an older settings file is converted to a list of worlds' ((@($converted.Worlds).Count -eq 1) -and ($converted.Worlds[0].SaveName -eq $world) -and ($converted.GitHubToken -eq 'expired-token') -and -not $converted.Endpoint)
     Check 'original player is now refused' (Has (Run A '-Action', 'play', '-NoLaunch') 'B has the world checked out')
     Check 'waiting gives up while checked out' (Has (Run A '-Action', 'wait') 'Still checked out')
     Check 'unchanged world is not re-uploaded' (Has (Run B '-Action', 'finish') 'nothing to send')
@@ -169,8 +171,8 @@ try {
     # Two players press Play at the same moment. A reads the state, pauses, and B gets in
     # first. A's write must then be refused, not overwrite B's check-out.
     $env:SMSYNC_HOME = "$root\A\home"; $env:SMSYNC_PLAYER = 'A'; $env:SMSYNC_TEST_CHECKOUT_DELAY = '6'
-    # pwsh here: Windows PowerShell started this way inherits PowerShell 7's module path and cannot load its own modules.
-    $slow = Start-Process pwsh.exe -PassThru -WindowStyle Hidden -RedirectStandardOutput "$root\slow.txt" -ArgumentList @(
+    # Windows PowerShell started from PowerShell 7 inherits its module path. The tool must cope with that.
+    $slow = Start-Process powershell.exe -PassThru -WindowStyle Hidden -RedirectStandardOutput "$root\slow.txt" -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$root\A\app\sm-sync.ps1`"", '-Action', 'play', '-NoLaunch')
     Remove-Item Env:SMSYNC_TEST_CHECKOUT_DELAY
     Start-Sleep -Seconds 2
@@ -209,24 +211,94 @@ try {
     $wizSave = "$root\H\saves\User_76561190000000002\Save\Survival\$wizWorld.db"
     [IO.File]::WriteAllBytes($wizSave, $bytes)
     $env:SMSYNC_SAVE_ROOT = "$root\H\saves"
-    $o = Run H '-NoUpdate' @('2', '1', 'c', '', 'c', "http://127.0.0.1:$Port/scrap-mechanic", 'k', 's', 'y', 'q')
-    $hostConfig = Get-Content "$root\H\app\sm-sync.config.json" -Raw | ConvertFrom-Json
+    $keyId = 'a1' * 16; $secret = 'b2' * 32
+    # A typed letter, the two keys swapped and a Cloudflare page are each refused with a reason.
+    $o = Run H '-NoUpdate' @('2', '1', 'c', '', 'c', 's', $secret, $keyId, $keyId, $secret, 'https://dash.cloudflare.com/x', "http://127.0.0.1:$Port/scrap-mechanic", 'y', 't', 'x', 'q')
+    Check 'setup: bad entries are refused with a reason' ((Has $o 'looks typed, not pasted') -and (Has $o 'That is the Secret Access Key') -and (Has $o 'That is the Access Key ID') -and (Has $o 'not the storage address'))
+    $hostConfig = (Get-Content "$root\H\app\sm-sync.config.json" -Raw | ConvertFrom-Json).Worlds[0]
     Check 'setup: a host is walked through all five steps' ((Has $o 'SETUP 1 OF 5') -and (Has $o 'SETUP 4 OF 5') -and (Has $o 'The storage accepted the keys') -and (Has $o 'SETUP 5 OF 5'))
     Check 'setup: writes the settings file' (($hostConfig.SaveName -eq $wizWorld) -and ($hostConfig.Bucket -eq 'scrap-mechanic') -and ($hostConfig.Endpoint -eq "http://127.0.0.1:$Port"))
     Check 'setup: uploads the world as the starting point' ((Has $o 'uploaded and available') -and ((Keys) -match 'Wizard_World/v000001'))
     $code = [regex]::Match(($o -replace '\s', ''), 'SMSYNC1:[A-Za-z0-9_-]+:[0-9a-f]{6}').Value
     Check 'setup: ends with an invite code' ($code.Length -gt 40)
-    Check 'the menu shows the invite again' (Has (Run H '-NoUpdate' @('f', 'q')) 'Anyone who has this code')
+    $inviteFile = "$root\H\app\Invite - Wizard_World.txt"
+    Check 'invite: T saves the message with the code on one line' ((Test-Path $inviteFile) -and (@(Get-Content $inviteFile) -contains $code))
+    Check 'the menu shows the invite again' (Has (Run H '-NoUpdate' @('f', 'x', 'q')) 'Anyone who has this code')
+    # Esc leaves the setup from a text prompt: nothing is saved and nothing loops.
+    New-Item -ItemType Directory -Force -Path "$root\E\app", "$root\E\home" | Out-Null
+    Copy-Item $script "$root\E\app\"
+    $o = Run E '-NoUpdate' @('2', '1', 'c', '', 'c', 'esc', 'esc', 'esc', 'y', 'q')
+    Check 'setup: Esc backs out stage by stage' ((Has $o 'Leave the setup?') -and -not (Test-Path "$root\E\app\sm-sync.config.json"))
 
     # A friend joins with that code, wrapped the way a chat app would wrap it.
     $env:SMSYNC_SAVE_ROOT = "$root\G\saves"
-    $o = Run G '-NoUpdate' @('1', 'SMSYNC1:AAAA:000000', '', 'q')
+    $o = Run G '-NoUpdate' @('1', 'SMSYNC1:AAAA:000000', 'esc', 'q')
     Check 'setup: a wrong invite code is refused' ((Has $o 'not a complete invite code') -and -not (Test-Path "$root\G\app\sm-sync.config.json"))
     $o = Run G '-NoUpdate' @('1', ("here you go " + $code.Substring(0, 30) + ' ' + $code.Substring(30)), 'q')
     Check 'setup: a friend joins with the invite code' ((Has $o "The shared world is '$wizWorld'") -and (Has $o 'The settings are saved'))
     $o = Run G '-Action', 'play', '-NoLaunch'
     Check 'setup: the friend gets the host''s world' ((Has $o 'now checked out to you') -and ((Get-FileHash "$root\G\saves\User_76561190000000002\Save\Survival\$wizWorld.db").Hash -eq (Get-FileHash $wizSave).Hash))
+    [void](Run G '-Action', 'finish')
+
+    # The host shares a second world in the same storage, then sees both on the Worlds screen.
+    $env:SMSYNC_SAVE_ROOT = "$root\H\saves"
+    # The second world is a Creative one, which the game keeps in Save itself. A Custom game
+    # in Save\Custom is on the list too.
+    New-Item -ItemType Directory -Force -Path "$root\H\saves\User_76561190000000002\Save\Custom" | Out-Null
+    [IO.File]::WriteAllBytes("$root\H\saves\User_76561190000000002\Save\Custom\Modded Run.db", $bytes)
+    (Get-Item "$root\H\saves\User_76561190000000002\Save\Custom\Modded Run.db").LastWriteTime = (Get-Date).AddDays(-3)
+    [IO.File]::WriteAllBytes("$root\H\saves\User_76561190000000002\Save\Second World.db", $bytes)
+    $o = Run H '-NoUpdate', '-Action', 'setup' @('2', '1', '1', 'y', 'x', 'q')
+    $hostWorlds = @((Get-Content "$root\H\app\sm-sync.config.json" -Raw | ConvertFrom-Json).Worlds)
+    Check 'setup: lists Survival, Creative and Custom worlds' ((Has $o 'Second World') -and (Has $o 'Creative') -and (Has $o 'Modded Run') -and (Has $o 'Custom'))
+    Check 'worlds: a second world reuses the storage' ((Has $o "The same storage as 'Wizard World'") -and ((Keys) -match 'Second_World/v000001') -and ($hostWorlds.Count -eq 2))
+    Check 'worlds: a Creative world is recorded as one' ($hostWorlds[1].Type -eq 'Creative')
+    $o = Run H '-NoUpdate' @('1', 'q')
+    Check 'worlds: two worlds start on the picker with live status' ((Has $o 'YOUR SHARED WORLDS') -and (Has $o 'AVAILABLE') -and (Has $o 'world Wizard World'))
+    Check 'worlds: -World picks one for a command' ((Has (Run H '-Action', 'status', '-World', 'Second World') 'Last upload') -and (Has (Run H '-Action', 'status', '-World', 'Nope') "No world named 'Nope'"))
+
+    # Only the player who first uploaded a world is offered "Delete for everyone".
+    $env:SMSYNC_SAVE_ROOT = "$root\G\saves"
+    $o = Run G '-NoUpdate' @('m', 'x', '1', 'esc', 'q')
+    Check 'worlds: a guest cannot delete the world for everyone' (Has $o 'only H, who first uploaded it')
+    $env:SMSYNC_SAVE_ROOT = "$root\H\saves"
+    $o = Run H '-NoUpdate' @('x', '1', '2', 'Wizard World', 'q')
+    Check 'worlds: the owner deletes the world for everyone' ((Has $o 'was deleted from the online storage') -and ((Keys) -notmatch 'Wizard_World/v0') -and ((Keys) -match 'Second_World/v000001'))
+    Check 'worlds: the deleted world is gone from the owner''s list' (@((Get-Content "$root\H\app\sm-sync.config.json" -Raw | ConvertFrom-Json).Worlds).Count -eq 1)
+    $env:SMSYNC_SAVE_ROOT = "$root\G\saves"
+    Check 'worlds: other players are told it was deleted' (Has (Run G '-Action', 'status') 'was deleted for everyone by H')
+    $o = Run G '-NoUpdate' @('m', 'x', '1', '1', 'Wizard World', 'q')
+    Check 'worlds: a world can be removed from this PC' ((Has $o 'was removed from this PC') -and (@((Get-Content "$root\G\app\sm-sync.config.json" -Raw | ConvertFrom-Json).Worlds).Count -eq 0))
+
+    # The friend joins the Creative world. The invite carries the type, so it lands in Save.
+    $env:SMSYNC_SAVE_ROOT = "$root\H\saves"
+    $o = Run H '-NoUpdate' @('f', 'x', 'q')
+    $code2 = [regex]::Match(($o -replace '\s', ''), 'SMSYNC1:[A-Za-z0-9_-]+:[0-9a-f]{6}').Value
+    $env:SMSYNC_SAVE_ROOT = "$root\G\saves"
+    $o = Run G '-NoUpdate' @('1', $code2, 'q')
+    Check 'types: the invite says the world is Creative' (Has $o 'a Creative world')
+    $o = Run G '-Action', 'play', '-NoLaunch'
+    $creativeCopy = "$root\G\saves\User_76561190000000002\Save\Second World.db"
+    Check 'types: a Creative world is downloaded into Save, not Save\Survival' ((Has $o 'now checked out to you') -and (Test-Path $creativeCopy) -and -not (Test-Path "$root\G\saves\User_76561190000000002\Save\Survival\Second World.db"))
+    [void](Run G '-Action', 'finish')
     Remove-Item Env:SMSYNC_SAVE_ROOT
+
+    # A world made with a Workshop mod: the upload records it, and a PC without the mod
+    # cannot check the world out until it is installed.
+    New-Item -ItemType Directory -Force -Path "$root\wsA\3772903275", "$root\wsB" | Out-Null
+    '{"name": "Test Mod", "type": "Custom Game"}' | Set-Content "$root\wsA\3772903275\description.json"
+    [void](Run A '-Action', 'play', '-NoLaunch', '-Yes')
+    & python -I "$PSScriptRoot\make_world.py" "$root\A\save\$world.db" 3 3772903275
+    $env:SMSYNC_WORKSHOP_ROOT = "$root\wsA"
+    [void](Run A '-Action', 'finish')
+    Check 'mods: the upload records the mods a world needs' (Has (Run A '-Action', 'status') 'Mods:         Test Mod')
+    $env:SMSYNC_WORKSHOP_ROOT = "$root\wsB"
+    $o = Run B '-Action', 'play', '-NoLaunch'
+    Check 'mods: a PC without the mod cannot check out' ((Has $o 'needs mods') -and (Has $o 'filedetails/?id=3772903275') -and (Has (Run B '-Action', 'status') 'World:        available'))
+    New-Item -ItemType Directory -Force -Path "$root\wsB\3772903275" | Out-Null
+    Check 'mods: once the mod is installed the check-out goes ahead' (Has (Run B '-Action', 'play', '-NoLaunch') 'now checked out to you')
+    [void](Run B '-Action', 'finish')
+    Remove-Item Env:SMSYNC_WORKSHOP_ROOT
 
     $o = Run A '-Action', 'update'
     $app = "$root\A\app"
@@ -243,8 +315,9 @@ try {
 }
 finally {
     if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force }
-    Remove-Item Env:SMSYNC_HOME, Env:SMSYNC_PLAYER, Env:SMSYNC_GAME_PROCESS, Env:SMSYNC_NO_TOAST, Env:SMSYNC_WAIT_SECONDS, Env:SMSYNC_NO_CLIPBOARD, Env:SMSYNC_NO_LAUNCH, Env:SMSYNC_STEAM_ID, Env:SMSYNC_GAME_BUILD, Env:SMSYNC_TEST_CHECKOUT_DELAY, Env:SMSYNC_SAVE_ROOT, Env:SMSYNC_REPORT_FILE -ErrorAction SilentlyContinue
+    Remove-Item Env:SMSYNC_HOME, Env:SMSYNC_PLAYER, Env:SMSYNC_GAME_PROCESS, Env:SMSYNC_NO_TOAST, Env:SMSYNC_WAIT_SECONDS, Env:SMSYNC_NO_CLIPBOARD, Env:SMSYNC_NO_LAUNCH, Env:SMSYNC_STEAM_ID, Env:SMSYNC_GAME_BUILD, Env:SMSYNC_TEST_CHECKOUT_DELAY, Env:SMSYNC_SAVE_ROOT, Env:SMSYNC_REPORT_FILE, Env:SMSYNC_WORKSHOP_ROOT -ErrorAction SilentlyContinue
 }
 Write-Host ''
 if ($failures) { Write-Host "$failures of $checks checks FAILED. Re-run with -ShowAll to see the output." -ForegroundColor Red; exit 1 }
 Write-Host "All $checks checks passed." -ForegroundColor Green
+exit 0

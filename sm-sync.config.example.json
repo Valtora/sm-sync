@@ -1,7 +1,11 @@
 {
-  "Endpoint": "https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com",
-  "Bucket": "YOUR_BUCKET_NAME",
-  "AccessKeyId": "PASTE_ACCESS_KEY_ID",
-  "SecretAccessKey": "PASTE_SECRET_ACCESS_KEY",
-  "SaveName": "YOUR_WORLD_NAME"
+  "Worlds": [
+    {
+      "Endpoint": "https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com",
+      "Bucket": "YOUR_BUCKET_NAME",
+      "AccessKeyId": "PASTE_ACCESS_KEY_ID",
+      "SecretAccessKey": "PASTE_SECRET_ACCESS_KEY",
+      "SaveName": "YOUR_WORLD_NAME"
+    }
+  ]
 }

@@ -2,6 +2,17 @@ What changed in each version of Scrap Mechanic Sync. Newest first.
 The tool shows the entries you have not seen yet after it updates itself.
 Format: a version number alone on a line, then one "- " line per change.
 
+0.4.0
+- Creative worlds and Custom games can be shared, as well as Survival worlds.
+- A world made with Steam Workshop mods lists them, and Play waits until they are installed on your PC. The invite includes their Workshop links.
+- New: more than one shared world. Press M for Worlds to switch, add, remove or delete one. With two or more worlds the tool starts on that list.
+- The player who first uploaded a world can delete it for everyone from the Worlds screen.
+- The setup can be left at any point with Esc, and it explains what is wrong with an entry it does not accept.
+- The Cloudflare steps in the setup now match the Cloudflare pages.
+- Invite a friend: Ctrl+C copies the whole invite message, and T saves it as a text file. The code is one line.
+- The desktop shortcut is now called "Scrap Mechanic - Sync". Press S to replace the old one.
+- Each world keeps its own backups.
+
 0.3.0
 - The tool is now open source. Updates no longer need a key.
 - New: a setup that runs the first time. It takes an invite code from a friend, or walks you through creating the online storage for a new shared world.
