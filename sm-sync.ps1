@@ -29,7 +29,7 @@ $ErrorActionPreference = 'Stop'
 
 # Bump Version for every release and tag the commit v<Version>.
 # Bump MinPeerVersion only when older copies must not touch the shared state any more.
-$script:Version        = '0.2.5'
+$script:Version        = '0.2.6'
 $script:MinPeerVersion = '0.2.0'
 
 $script:SteamAppId   = '387990'
@@ -1126,6 +1126,7 @@ function Start-PlaySession {
     Say '      It uploads the world by itself when you quit the game.' 'Text'
     Say '      If this window gets closed, the upload still happens in the background.' 'Dim'
     Say '      If Steam asks about a Cloud conflict, choose the LOCAL files.' 'Dim'
+    Say '      If Steam asks to "Launch Game with custom arguments", click Continue.' 'Dim'
     Say ''
     $start = Get-Date
     do {
@@ -1730,6 +1731,7 @@ function Join-FriendGame {
     Say-Wrapped '    1.  ' 'Orange' 'Press Shift+Tab to open the Steam overlay, or open your Steam friends list.'
     Say-Wrapped '    2.  ' 'Orange' "Find $name, click the arrow beside their name and choose Join Game."
     Say ''
+    Say-Wrapped '  ' 'Text' 'If Steam asks to "Launch Game with custom arguments", click Continue. That is this tool telling the game who to join.' 'Dim'
     Say-Wrapped '  ' 'Text' "Do not load the shared world yourself from the game's own menu. Right now only $name's copy is the real one." 'Dim'
     # The status box would otherwise warn about a game running without a check-out.
     $script:WarnedOutside = $true

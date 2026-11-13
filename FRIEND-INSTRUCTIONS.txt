@@ -47,6 +47,14 @@ IF SOMETHING LOOKS WRONG
    If you want to play on your own, wait until it says AVAILABLE. Do not load the
    world yourself before then, or your progress will be lost.
 
+Steam asks to "Launch Game with custom arguments"
+   Click Continue. That is this tool telling the game which world to open or which
+   friend to join.
+
+Steam shows "Unable to sync", or joining says "Connection lost"
+   Steam has lost its own connection. Quit the game, exit Steam completely (Steam menu,
+   Exit), start Steam again, and try once more. Your world is not affected.
+
 Steam asks about a "Cloud conflict"
    Choose the LOCAL files.
 
