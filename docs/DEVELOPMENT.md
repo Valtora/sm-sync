@@ -148,7 +148,7 @@ Every copy that is not inside a git checkout follows the highest `vX.Y.Z` tag, n
 
 ```
 dev\make-release-zip.ps1
-gh release create v0.3.0 "dist\Scrap-Mechanic-Sync.zip" --title v0.3.0 --notes-file CHANGES.txt
+gh release create vX.Y.Z "dist\Scrap-Mechanic-Sync.zip" --title vX.Y.Z --notes-file CHANGES.txt
 ```
 
 At its next launch, or within 15 minutes if its menu is open, each copy downloads the tag,
