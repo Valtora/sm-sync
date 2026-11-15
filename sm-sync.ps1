@@ -42,7 +42,7 @@ if ($PSVersionTable.PSEdition -ne 'Core') {
 
 # Bump Version for every release and tag the commit v<Version>.
 # Bump MinPeerVersion only when older copies must not touch the shared state any more.
-$script:Version        = '0.4.0'
+$script:Version        = '0.4.1'
 $script:MinPeerVersion = '0.4.0'
 
 # Where updates come from and where issues go. "GitHubRepo" in the settings file overrides it.

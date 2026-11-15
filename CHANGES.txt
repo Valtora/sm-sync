@@ -2,6 +2,9 @@ What changed in each version of Scrap Mechanic Sync. Newest first.
 The tool shows the entries you have not seen yet after it updates itself.
 Format: a version number alone on a line, then one "- " line per change.
 
+0.4.1
+- The tool's window now opens every time. Before, it could vanish at once if no other Windows Terminal window was open.
+
 0.4.0
 - Creative worlds and Custom games can be shared, as well as Survival worlds.
 - A world made with Steam Workshop mods lists them, and Play waits until they are installed on your PC. The invite includes their Workshop links.
